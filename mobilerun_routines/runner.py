@@ -225,17 +225,6 @@ def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
     return result
 
 
-def _spill_to_dataset(
-    entry: EntryPoint, dataset: DatasetFile | None, result: Any
-) -> Any:
-    """With a dataset file the returned items follow the pushed ones and `result` is empty."""
-    if dataset is None or result is None or entry.output_kind != "dataset":
-        return result
-    for item in result["items"]:
-        dataset.append(dumps_json(item))
-    return None
-
-
 def _execute(
     entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None
 ) -> tuple[dict[str, Any], int]:
@@ -255,7 +244,8 @@ def _execute(
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
         if failure is None:
-            result = _spill_to_dataset(entry, dataset, result)
+            if entry.output_kind == "dataset":
+                result = ctx.dataset.finish(result)
     except (Exception, SystemExit) as exc:
         # ScriptError stays typed; anything else raised by script code or its validators and
         # serializers is a script_error.

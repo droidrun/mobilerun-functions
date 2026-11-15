@@ -112,11 +112,21 @@ def test_pushed_invalid_dict_does_not_leak_values(run_script, dataset_file):
     assert "SECRET" not in json.dumps(r.envelope) and "nope" not in json.dumps(r.envelope)
 
 
-def test_push_without_the_flag_is_not_available(run_script):
-    r = run_script(ds_script(PUSH_TWO))
-    assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.dataset.push")
+def test_push_without_file_buffers_before_returned_items(run_script):
+    r = run_script(ds_script(PUSH_TWO + '\nreturn Dataset(items=[Item(id="c")])'))
+    assert r.code == 0
+    assert [item["id"] for item in r.envelope["result"]["items"]] == ["a", "b", "c"]
     assert "dataset" not in r.envelope
+
+
+def test_buffer_validates_items_and_enforces_byte_limit(run_script, monkeypatch):
+    invalid = run_script(ds_script('ctx.dataset.push({"id": 123})'))
+    assert invalid.envelope["error"]["code"] == "output_invalid"
+    monkeypatch.setattr("mobilerun_routines.dataset.DATASET_MAX_BYTES", len(b'{"id":"a","price":0.0}\n'))
+    exact = run_script(ds_script('ctx.dataset.push(Item(id="a"))'))
+    assert exact.code == 0
+    over = run_script(ds_script('ctx.dataset.push(Item(id="é"))'))
+    assert over.envelope["error"]["code"] == "dataset_too_large"
 
 
 @pytest.mark.parametrize("ret", ["Out", None], ids=["value", "none"])

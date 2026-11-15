@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import threading
 from pathlib import Path
@@ -47,9 +49,9 @@ class DatasetFile:
     limit together or interleave lines. `finalise` cuts the file back to the last complete line.
     """
 
-    def __init__(self, path: str | os.PathLike[str]) -> None:
-        self.path = Path(path)
-        self._fh = open(self.path, "wb", buffering=0)  # noqa: SIM115 - closed in `close`
+    def __init__(self, path: str | os.PathLike[str] | None) -> None:
+        self.path = Path(path) if path is not None else None
+        self._fh = io.BytesIO() if self.path is None else open(self.path, "wb", buffering=0)  # noqa: SIM115 - closed in `close`
         self._lock = threading.Lock()
         self._items = 0
         self._bytes = 0  # offset of the end of the last complete line
@@ -84,6 +86,10 @@ class DatasetFile:
         with self._lock:
             return {"items": self._items, "bytes": self._bytes}
 
+    def buffered_items(self) -> list[Any]:
+        with self._lock:
+            return [json.loads(line) for line in self._fh.getvalue().splitlines()]
+
     def close(self) -> None:
         self._fh.close()
 
@@ -96,9 +102,21 @@ class DatasetSink:
     """
 
     def __init__(self, file: DatasetFile | None = None, item_type: Any = None) -> None:
-        self._file = file
+        self._file = file if file is not None else DatasetFile(None)
         self._adapter = None if item_type is None else TypeAdapter(item_type)
         self._item_type = item_type
+
+    @property
+    def count(self) -> int:
+        return self._file.stats()["items"]
+
+    def finish(self, result: Any) -> Any:
+        if result is not None:
+            from ._io import dumps_json
+
+            for item in result["items"]:
+                self._file.append(dumps_json(item))
+        return {"items": self._file.buffered_items()} if self._file.path is None else None
 
     def push(self, item: Any) -> None:
         """Validate `item` against the dataset's item model and append it as one line.
@@ -106,10 +124,6 @@ class DatasetSink:
         Raises `DatasetItemInvalidError` for an invalid item and `DatasetTooLargeError` when the
         line would take the file over `DATASET_MAX_BYTES`; earlier lines stay.
         """
-        if self._file is None:
-            raise NotAvailableError(
-                "dataset.push", "is not available in this run: the platform gave no dataset file"
-            )
         if self._adapter is None:
             raise NotAvailableError(
                 "dataset.push", "is only available when the entry point returns Dataset[Item]"
