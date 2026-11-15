@@ -10,6 +10,10 @@ import ast
 from dataclasses import dataclass
 from typing import Any
 
+from .errors import EntryPointError, NoEntryPointError
+from .loader import ScriptImportError, ScriptSyntaxError
+from .schema import SchemaError
+
 PACKAGE = "mobilerun_routines"
 
 SYNTAX_ERROR = "syntax_error"
@@ -76,16 +80,36 @@ def syntax_issue(exc: BaseException) -> Issue:
     return Issue(SYNTAX_ERROR, f"syntax error: {message}", line, hint)
 
 
-def runtime_issue(
-    code: str, message: str, exc: BaseException, path: str, *, hint: bool = False
-) -> Issue:
+def runtime_issue(code: str, message: str, exc: BaseException, path: str) -> Issue:
     """The issue for `exc`, raised while the script at `path` was imported.
 
-    It has the line of the script frame in the traceback, and the repair hint when `hint` is set
-    or `exc` is one of the usual setup mistakes.
+    It has the line of the script frame in the traceback, and the repair hint when `exc`
+    is one of the usual setup mistakes.
     """
-    use_hint = hint or is_setup_mistake(exc)
+    use_hint = is_setup_mistake(exc)
     return Issue(code, message, _script_line(exc, path), SCRIPT_HINT if use_hint else None)
+
+
+def issues_for(
+    exc: OSError | EntryPointError | ScriptImportError | SchemaError,
+    source: bytes,
+    path: str,
+) -> list[Issue]:
+    """Map load and contract failures to the same diagnostics for inspect and run."""
+    if isinstance(exc, OSError):
+        return [Issue(IMPORT_FAILED, f"cannot read script: {exc}")]
+    if isinstance(exc, NoEntryPointError):
+        return explain(Issue(NO_ENTRY_POINT, str(exc), hint=SCRIPT_HINT), source, path)
+    if isinstance(exc, EntryPointError):
+        issue = runtime_issue(ENTRY_POINT_INVALID, str(exc), exc, path)
+        return explain(issue, source, path)
+    if isinstance(exc, ScriptSyntaxError):
+        return [syntax_issue(exc.original)]
+    if isinstance(exc, ScriptImportError):
+        message = f"{type(exc.original).__name__}: {exc.original}"
+        issue = runtime_issue(IMPORT_FAILED, message, exc.original, path)
+        return explain(issue, source, path) if issue.hint else [issue]
+    return [Issue(SCHEMA_UNSUPPORTED, str(exc))]
 
 
 def explain(failure: Issue, source: bytes | str, filename: str) -> list[Issue]:

@@ -10,22 +10,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import NoReturn, get_args
 
-from ._check import (
-    ENTRY_POINT_INVALID,
-    IMPORT_FAILED,
-    NO_ENTRY_POINT,
-    SCHEMA_UNSUPPORTED,
-    SCRIPT_HINT,
-    Issue,
-    explain,
-    runtime_issue,
-    syntax_issue,
-)
+from ._check import Issue, issues_for
 from ._contract import inspect_entry
 from ._template import STARTER_SCRIPT
 from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
-from .errors import EntryPointError, NoEntryPointError
-from .loader import ScriptImportError, ScriptSyntaxError, load_script
+from .errors import EntryPointError
+from .loader import ScriptImportError, load_script
 from .runner import (
     EXIT_NO_ENTRY_POINT,
     EXIT_OK,
@@ -104,38 +94,16 @@ def _inspect(path: str) -> int:
     try:
         source = Path(path).read_bytes()
     except OSError as exc:
-        return _reject(_issues(exc, b"", path))
+        return _reject(issues_for(exc, b"", path))
     try:
         # The script runs at import: what it prints must not end up in the JSON on stdout.
         with contextlib.redirect_stdout(sys.stderr):
             entry = load_script(path)
             document = inspect_entry(entry)
     except (OSError, EntryPointError, ScriptImportError, SchemaError) as exc:
-        return _reject(_issues(exc, source, path))
+        return _reject(issues_for(exc, source, path))
     sys.stdout.write(json.dumps(document) + "\n")
     return EXIT_OK
-
-
-def _issues(
-    exc: OSError | EntryPointError | ScriptImportError | SchemaError,
-    source: bytes,
-    path: str,
-) -> list[Issue]:
-    """Map load and contract failures to the same diagnostics for inspect and run."""
-    if isinstance(exc, OSError):
-        return [Issue(IMPORT_FAILED, f"cannot read script: {exc}")]
-    if isinstance(exc, NoEntryPointError):
-        return explain(Issue(NO_ENTRY_POINT, str(exc), hint=SCRIPT_HINT), source, path)
-    if isinstance(exc, EntryPointError):
-        issue = runtime_issue(ENTRY_POINT_INVALID, str(exc), exc, path)
-        return explain(issue, source, path)
-    if isinstance(exc, ScriptSyntaxError):
-        return [syntax_issue(exc.original)]
-    if isinstance(exc, ScriptImportError):
-        message = f"{type(exc.original).__name__}: {exc.original}"
-        issue = runtime_issue(IMPORT_FAILED, message, exc.original, path)
-        return explain(issue, source, path) if issue.hint else [issue]
-    return [Issue(SCHEMA_UNSUPPORTED, str(exc))]
 
 
 def _reject(errors: list[Issue], *, json_output: bool = True) -> int:
@@ -156,7 +124,13 @@ def _reject(errors: list[Issue], *, json_output: bool = True) -> int:
     return EXIT_NO_ENTRY_POINT
 
 
-def _run(args: argparse.Namespace) -> int:
+def _invalid_device_flags(args: argparse.Namespace) -> bool:
+    return args.device_target != "local" and bool(args.device_platform or args.device_url)
+
+
+def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if _invalid_device_flags(args):
+        parser.error("--device-platform and --device-url need --device-target local")
     info = RunInfo(
         run_id=args.run_id,
         attempt=args.attempt,
@@ -178,7 +152,7 @@ def _run(args: argparse.Namespace) -> int:
     try:
         return run(opts)
     except (EntryPointError, SchemaError) as exc:
-        return _reject(_issues(exc, Path(args.path).read_bytes(), args.path), json_output=False)
+        return _reject(issues_for(exc, Path(args.path).read_bytes(), args.path), json_output=False)
     except RunnerFault as exc:
         sys.stderr.write(f"{exc}\n")
         return EXIT_RUNNER_FAULT
@@ -187,11 +161,8 @@ def _run(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
-    if args.command == "run" and args.device_target != "local":
-        if args.device_platform or args.device_url:
-            parser.error("--device-platform and --device-url need --device-target local")
     if args.command == "new":
         return _new(args.path)
     if args.command == "inspect":
         return _inspect(args.path)
-    return _run(args)
+    return _run(args, parser)
