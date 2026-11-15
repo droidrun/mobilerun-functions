@@ -408,8 +408,9 @@ DATASET = script_source(
     'return Dataset(items=[Item(id="a", price=1.5), {"id": "b", "price": 2}])',
     ret="Dataset[Item]",
     before="""
+    from mobilerun_routines import key_field
     class Item(BaseModel):
-        id: str
+        id: str = key_field()
         price: float
     """,
 )

@@ -27,6 +27,7 @@ from pydantic import (
     ValidationError,
 )
 
+from ._contract import inspect_entry
 from ._io import atomic_write_text, dumps_json
 from ._validate import revalidate, validation_details
 from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State, _one_line
@@ -310,6 +311,7 @@ def _run_script(opts: RunOptions, dataset: DatasetFile | None) -> tuple[dict[str
         raise RunnerFault(f"cannot read script: {exc}") from exc
     except ScriptImportError as exc:
         return _failure_from_exception(exc.original), EXIT_FAILED
+    inspect_entry(entry)
     return _execute(entry, opts, dataset)
 
 

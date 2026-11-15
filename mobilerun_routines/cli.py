@@ -22,7 +22,7 @@ from ._check import (
     syntax_issue,
 )
 from ._template import STARTER_SCRIPT
-from ._version import SDK_VERSION
+from ._contract import inspect_entry
 from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
 from .errors import EntryPointError, NoEntryPointError
 from .loader import ScriptImportError, ScriptSyntaxError, load_script
@@ -34,7 +34,7 @@ from .runner import (
     RunOptions,
     run,
 )
-from .schema import SchemaError, dataset_key, input_schema, output_schema
+from .schema import SchemaError
 
 MODES = get_args(RunMode)
 DEVICE_TARGETS = get_args(DeviceTarget)
@@ -109,18 +109,7 @@ def _inspect(path: str) -> int:
         # The script runs at import: what it prints must not end up in the JSON on stdout.
         with contextlib.redirect_stdout(sys.stderr):
             entry = load_script(path)
-            output = output_schema(entry.output_model) if entry.output_model else None
-            document = {
-                "ok": True,
-                "entrypoint": entry.name,
-                "async": entry.is_async,
-                "inputSchema": input_schema(entry.input_model),
-                "outputSchema": output,
-                "outputKind": entry.output_kind,
-                "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
-                "sdkVersion": SDK_VERSION,
-                "warnings": [],
-            }
+            document = inspect_entry(entry)
     except OSError as exc:
         return _reject([Issue(IMPORT_FAILED, f"cannot read script: {exc}")])
     except NoEntryPointError as exc:
@@ -181,8 +170,10 @@ def _run(args: argparse.Namespace) -> int:
     try:
         return run(opts)
     except EntryPointError as exc:
-        sys.stderr.write(f"{exc}\n")
-        return EXIT_NO_ENTRY_POINT
+        issue = runtime_issue(ENTRY_POINT_INVALID, str(exc), exc, args.path)
+        return _reject(explain(issue, Path(args.path).read_bytes(), args.path))
+    except SchemaError as exc:
+        return _reject([Issue(SCHEMA_UNSUPPORTED, str(exc))])
     except RunnerFault as exc:
         sys.stderr.write(f"{exc}\n")
         return EXIT_RUNNER_FAULT

@@ -288,3 +288,19 @@ def test_a_str_subclass_cannot_smuggle_a_reserved_code(run_script):
     body = SNEAKY + '\nraise ScriptError(Sneaky("cancelled"), "mine")'
     r = run_script(script_source(body))
     assert r.code == 1 and r.envelope["error"]["code"] == "script_error"
+
+
+@pytest.mark.parametrize("models,ret", [
+    ('class In(BaseModel):\n    name: str = Field(pattern="x")\n', "None"),
+    ('class In(BaseModel):\n    pass\nclass Item(BaseModel):\n    id: str\n', "Dataset[Item]"),
+])
+def test_run_reuses_inspect_contract_before_reading_input(
+    run_script, inspect_source, models, ret
+):
+    from script_source import script_source
+
+    source = script_source(models=models, ret=ret)
+    inspected = inspect_source(source)
+    ran = run_script(source, raw_input="not json")
+    assert inspected[0] == ran.code == 3 and ran.envelope is None
+    assert ran.out == inspected[1] and ran.err == inspected[2]
