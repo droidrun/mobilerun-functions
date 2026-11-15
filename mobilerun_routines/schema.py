@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticUserError
@@ -14,7 +14,7 @@ REJECTED_KEYWORDS = ("pattern", "patternProperties", "prefixItems", "discriminat
 # The `format` values the platform validates (with `ajv-formats`).
 ALLOWED_FORMATS = ("date-time", "date", "uuid", "uri", "email")
 # Keywords whose value is a map of name -> schema.
-_SCHEMA_MAPS = ("properties", "patternProperties", "dependentSchemas")
+_SCHEMA_MAPS = ("properties", "dependentSchemas")
 # Keywords whose value is one schema, with the path suffix that names the position.
 _SCHEMA_ONE = {
     "items": "[]",
@@ -29,7 +29,7 @@ _SCHEMA_ONE = {
     "unevaluatedProperties": "{}",
 }
 # Keywords whose value is a list of schemas.
-_SCHEMA_LISTS = ("anyOf", "oneOf", "allOf", "prefixItems")
+_SCHEMA_LISTS = ("anyOf", "oneOf", "allOf")
 
 
 class SchemaError(Exception):
@@ -58,7 +58,7 @@ def _walk(node: Any, defs: dict[str, Any], stack: tuple[str, ...], path: str) ->
             raise SchemaError(f"{_where(path)}: keyword '{key}' is not supported")
         if key == "format" and value not in ALLOWED_FORMATS:
             raise SchemaError(f"{_where(path)}: format '{value}' is not supported")
-        if key in ("title", "$defs", "definitions"):
+        if key in ("title", "$defs"):
             continue
         if key in _SCHEMA_MAPS and isinstance(value, dict):
             out[key] = {
@@ -80,8 +80,8 @@ def model_schema(model: type[BaseModel], mode: JsonSchemaMode) -> dict[str, Any]
         raw = model.model_json_schema(mode=mode)
     except (PydanticInvalidForJsonSchema, PydanticUserError) as exc:
         raise SchemaError(f"cannot build JSON Schema: {str(exc).splitlines()[0]}") from exc
-    defs = {**raw.get("definitions", {}), **raw.get("$defs", {})}
-    return _walk(raw, defs, (), "")
+    defs = raw.get("$defs", {})
+    return cast(dict[str, Any], _walk(raw, defs, (), ""))
 
 
 def dataset_key(schema: dict[str, Any]) -> str:
@@ -92,7 +92,7 @@ def dataset_key(schema: dict[str, Any]) -> str:
     integer (so a `UUID` is fine and a `float` is not).
     """
     items = schema.get("properties", {}).get("items", {}).get("items", {})
-    properties = items.get("properties", {}) if isinstance(items, dict) else {}
+    properties: dict[str, Any] = items.get("properties", {}) if isinstance(items, dict) else {}
     keys = [name for name, prop in properties.items() if prop.get(KEY_MARKER) is True]
     if not keys:
         raise SchemaError("dataset items have no key: mark one field with key_field()")

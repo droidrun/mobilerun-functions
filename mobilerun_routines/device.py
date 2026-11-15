@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, cast
 
 from .errors import NotAvailableError
 
 if TYPE_CHECKING:
+    from mobilerun_core import Device
+
     from .context import DevicePlatform, DeviceTarget
 
 # Set by the platform. The key is a placeholder; the platform attaches the real credential
@@ -37,7 +39,7 @@ def connect_device(
     target: DeviceTarget = "cloud",
     platform: DevicePlatform | None = None,
     url: str | None = None,
-) -> Any:
+) -> Device:
     """Connect to the run's device and return the `mobilerun_core` device unchanged."""
     if target == "local":
         return _connect_local(device_id, platform, url)
@@ -50,7 +52,7 @@ def _local_backend(platform: str | None, url: str | None) -> str:
     return "local-android-http" if url else "local-android-adb"
 
 
-def _connect_local(device_id: str | None, platform: str | None, url: str | None) -> Any:
+def _connect_local(device_id: str | None, platform: str | None, url: str | None) -> Device:
     try:
         core = importlib.import_module("mobilerun_core")
         importlib.import_module("mobilerun_core_local")
@@ -60,12 +62,14 @@ def _connect_local(device_id: str | None, platform: str | None, url: str | None)
         # An explicit backend means a local run can never reach the cloud. No bearer: local
         # devices need none, and Portal tokens come from core's own environment variables.
         client = core.Mobilerun()
-        return client.connect(device_id, backend=_local_backend(platform, url), url=url)
+        return cast(
+            "Device", client.connect(device_id, backend=_local_backend(platform, url), url=url)
+        )
     except ValueError as exc:
         raise _missing(f"is not available: {' '.join(str(exc).split())}") from None
 
 
-def _connect_cloud(device_id: str | None) -> Any:
+def _connect_cloud(device_id: str | None) -> Device:
     if not device_id:
         raise _missing("is not available: this run has no device")
     try:
@@ -82,4 +86,4 @@ def _connect_cloud(device_id: str | None) -> Any:
     if absent:
         raise _missing(f"is not available: {' and '.join(absent)} not set")
     client = core.Mobilerun(bearer=api_key, base_url=base_url)
-    return client.connect(device_id, cloud=True)
+    return cast("Device", client.connect(device_id, cloud=True))

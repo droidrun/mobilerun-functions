@@ -29,3 +29,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[[tool.mypy.overrides]]
+module = ["mobilerun_core", "mobilerun_core.*"]
+ignore_missing_imports = true
