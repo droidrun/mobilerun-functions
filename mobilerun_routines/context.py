@@ -104,7 +104,9 @@ class State:
     def save(self, data: Any, schema: int = 1) -> None:
         """Record the snapshot the platform stores after a successful run (last call wins)."""
         if not self._configured:
-            raise NotAvailableError("state.save")
+            raise NotAvailableError(
+                "state.save", "is not available in this run: pass --state-file PATH to run"
+            )
         schema = _STRICT_INT.validate_python(schema)
         payload = data.model_dump_json() if isinstance(data, BaseModel) else dumps_json(data)
         # Copy now so later changes to `data` do not alter the snapshot.

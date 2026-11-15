@@ -668,3 +668,16 @@ def test_an_input_that_is_not_json_is_left_out_and_the_run_is_unchanged(run_scri
         "outcome": "succeeded",
         "result": {"n": 1.0},
     }
+
+
+def test_state_missing_file_then_envelope_round_trip(run_script, tmp_path):
+    first = run_script(STATE_SCRIPT, {"name": "save"},
+                       extra_args=["--state-file", str(tmp_path / "missing.json")])
+    assert first.code == 0
+    second = run_script(STATE_SCRIPT, state=first.envelope["state"])
+    assert second.code == 0 and "schema=2" in second.err
+
+
+def test_state_save_without_flag_explains_configuration(run_script):
+    r = run_script(STATE_SCRIPT, {"name": "save"})
+    assert "pass --state-file PATH to run" in r.envelope["error"]["message"]

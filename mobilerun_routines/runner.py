@@ -110,7 +110,7 @@ class _StateMeta(BaseModel):
 
 
 class _StateFile(BaseModel):
-    version: StrictInt
+    version: StrictInt = 1
     meta: _StateMeta
     data: Any
 
@@ -170,6 +170,8 @@ def _read_state(path: str | None) -> State:
         return State(configured=False)
     try:
         raw = Path(path).read_bytes()
+    except FileNotFoundError:
+        return State(configured=True)
     except OSError as exc:
         raise RunnerFault(f"cannot read state file: {exc}") from exc
     try:
