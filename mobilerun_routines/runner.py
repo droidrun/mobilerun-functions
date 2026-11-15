@@ -29,7 +29,7 @@ from pydantic import (
 
 from ._io import atomic_write_text, dumps_json
 from ._validate import revalidate, validation_details
-from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State
+from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State, _one_line
 from .dataset import DatasetFile, DatasetSink
 from .entry import EntryPoint
 from .errors import (
@@ -337,6 +337,11 @@ def run(opts: RunOptions) -> int:
         if opts.echoed_input is not None:
             envelope["input"] = opts.echoed_input
         _write_envelope(opts.result_file, envelope)
+        if code in (EXIT_FAILED, EXIT_INPUT_INVALID):
+            error = envelope["error"]
+            details = error.get("details", [])
+            suffix = " " + dumps_json(details) if details else ""
+            sys.stderr.write(_one_line(f"error {error['code']}: {error['message']}{suffix}") + "\n")
         return code
     finally:
         cancellation.restore()

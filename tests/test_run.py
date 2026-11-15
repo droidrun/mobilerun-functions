@@ -681,3 +681,22 @@ def test_state_missing_file_then_envelope_round_trip(run_script, tmp_path):
 def test_state_save_without_flag_explains_configuration(run_script):
     r = run_script(STATE_SCRIPT, {"name": "save"})
     assert "pass --state-file PATH to run" in r.envelope["error"]["message"]
+
+
+@pytest.mark.parametrize("body,code", [
+    ('raise ScriptError("bad", "two\\nlines")', "bad"),
+    ('return {"greeting": 123}', "output_invalid"),
+])
+def test_failed_runs_have_one_stderr_summary(run_script, body, code):
+    r = run_script(script_source(body))
+    summaries = [line for line in r.err.splitlines() if line.startswith("error ")]
+    assert len(summaries) == 1 and summaries[0].startswith(f"error {code}:")
+    if code == "output_invalid":
+        assert "greeting" in summaries[0] and "string_type" in summaries[0]
+        assert "123" not in summaries[0]
+
+
+def test_input_failure_stderr_details_are_redacted(run_script):
+    r = run_script(script_source(), {"count": "SECRET"})
+    assert r.code == 2 and r.err.startswith("error input_invalid:")
+    assert "count" in r.err and "int_parsing" in r.err and "SECRET" not in r.err
