@@ -29,6 +29,7 @@ def test_inspect_sample(inspect_source):
     code, out, err = inspect_source(SAMPLE)
     assert code == 0 and err == ""
     doc = json.loads(out)
+    assert doc["warnings"] == []
     assert doc["ok"] is True and doc["datasetKey"] is None
     assert doc["entrypoint"] == "main" and doc["async"] is False
     assert doc["sdkVersion"] == SDK_VERSION == "0.7.0" and doc["outputKind"] == "value"

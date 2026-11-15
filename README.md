@@ -169,6 +169,15 @@ Static checking accepts models and dictionaries for `push`; the precise `Item` s
 at runtime. For direct tests, pass `DatasetSink(item_type=Item)` from `mobilerun_routines.dataset`
 to `Context(..., dataset=...)`.
 
+Instead of pushing, return the items together:
+
+```python
+@script
+def main(input: Input, ctx: Context) -> Dataset[Product]:
+    return Dataset(items=[Product(sku="a", name="Apple", unit_price=1.0),
+                          Product(sku="b", name="Banana", unit_price=2.0)])
+```
+
 ### Dataset example
 
 ```python
@@ -306,6 +315,7 @@ On success it prints one JSON object on stdout and exits 0:
 serialization name of the item field marked with `key_field()` for a `Dataset[Item]` output, else
 `null`. `warnings` is a list of issues (see below). A missing return annotation adds
 `return_annotation_missing`: no output is assumed. Annotate the function to make its intent clear.
+For datasets, item fields live at `outputSchema.properties.items.items.properties`.
 The script runs when it is imported; what it prints goes to stderr, so stdout holds exactly the
 JSON document (output written straight to file descriptor 1 is not intercepted).
 

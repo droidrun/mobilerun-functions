@@ -35,6 +35,7 @@ def test_script_error_code_must_match_the_pattern(run_script, code):
 def test_valid_script_error_codes_are_kept(run_script, code):
     r = run_script(script_source(f'raise ScriptError({code!r}, "mine")'))
     assert r.envelope["error"]["code"] == code
+    assert "warning:" not in r.err
 
 
 def test_script_error_message_is_cut(run_script):
@@ -301,6 +302,7 @@ def test_a_str_subclass_cannot_smuggle_a_reserved_code(run_script):
             "@script",
         ),
         ("class In(BaseModel):\n    pass\n", "None", ""),
+        ("class In(BaseModel):\n    pass\n", "list[In]", "@script"),
     ],
 )
 def test_run_reuses_inspect_contract_before_reading_input(
@@ -313,12 +315,15 @@ def test_run_reuses_inspect_contract_before_reading_input(
     assert json.loads(out)["ok"] is False and ran.out == "" and ran.err == err
 
 
-@pytest.mark.parametrize("code", ["Bad", "cancelled", "two\nlines"])
-def test_invalid_script_error_code_warns_once(run_script, code):
+@pytest.mark.parametrize("code,expected", [
+    ("Bad", "warning: ScriptError code 'Bad' is invalid or reserved; reported as script_error"),
+    ("cancelled", "warning: ScriptError code 'cancelled' is invalid or reserved; "
+     "reported as script_error"),
+    ("two\nlines", r"warning: ScriptError code 'two\nlines' is invalid or reserved; "
+     "reported as script_error"),
+])
+def test_invalid_script_error_code_warns_once(run_script, code, expected):
     r = run_script(script_source(f'raise ScriptError({code!r}, "mine")'))
     warnings = [line for line in r.err.splitlines() if line.startswith("warning:")]
-    escaped = code.replace("\n", "\\n")
-    assert warnings == [
-        f"warning: ScriptError code '{escaped}' is invalid or reserved; reported as script_error"
-    ]
+    assert warnings == [expected]
     assert r.envelope["error"]["code"] == "script_error"

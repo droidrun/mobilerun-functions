@@ -449,7 +449,10 @@ def test_state_flag_absent(run_script):
 def test_state_save_without_flag_raises(run_script):
     r = run_script(STATE_SCRIPT, {"name": "save"})
     assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.state.save")
+    assert r.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.state.save is not available in this run: "
+        "pass --state-file PATH to run"
+    )
 
 
 def test_state_null(run_script):
@@ -676,29 +679,26 @@ def test_state_missing_file_then_envelope_round_trip(run_script, tmp_path):
         STATE_SCRIPT, {"name": "save"}, extra_args=["--state-file", str(tmp_path / "missing.json")]
     )
     assert first.code == 0
+    assert first.err.splitlines() == ["[INFO] prev=None schema=None"]
     second = run_script(STATE_SCRIPT, state=first.envelope["state"])
-    assert second.code == 0 and "schema=2" in second.err
+    assert second.code == 0
+    assert second.err.splitlines() == ["[INFO] prev={'seen': ['a', 'b'], 'n': 1} schema=2"]
 
 
-def test_state_save_without_flag_explains_configuration(run_script):
-    r = run_script(STATE_SCRIPT, {"name": "save"})
-    assert "pass --state-file PATH to run" in r.envelope["error"]["message"]
+def test_failed_runs_have_one_stderr_summary(run_script):
+    r = run_script(script_source('raise ScriptError("bad", "two\\nlines")'))
+    assert r.code == 1
+    assert r.err.splitlines() == [r"error bad: two\nlines"]
 
 
-@pytest.mark.parametrize(
-    "body,code",
-    [
-        ('raise ScriptError("bad", "two\\nlines")', "bad"),
-        ('return {"greeting": 123}', "output_invalid"),
-    ],
-)
-def test_failed_runs_have_one_stderr_summary(run_script, body, code):
-    r = run_script(script_source(body))
-    summaries = [line for line in r.err.splitlines() if line.startswith("error ")]
-    assert len(summaries) == 1 and summaries[0].startswith(f"error {code}:")
-    if code == "output_invalid":
-        assert "greeting" in summaries[0] and "string_type" in summaries[0]
-        assert "123" not in summaries[0]
+def test_output_failure_stderr_details_are_redacted(run_script):
+    r = run_script(script_source('return {"greeting": 123}'))
+    assert r.code == 1
+    assert r.err.splitlines() == [
+        'error output_invalid: the return value does not match Out '
+        '[{"path":"greeting","message":"string_type"}]'
+    ]
+    assert "123" not in r.err
 
 
 def test_input_failure_stderr_details_are_redacted(run_script):
@@ -720,5 +720,7 @@ def test_missing_return_annotation_warns_but_runs(inspect_source, run_script):
     source = script_source(ret=None)
     code, out, _ = inspect_source(source)
     assert code == 0
-    assert json.loads(out)["warnings"][0]["code"] == "return_annotation_missing"
+    warnings = json.loads(out)["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "return_annotation_missing"
     assert run_script(source).code == 0

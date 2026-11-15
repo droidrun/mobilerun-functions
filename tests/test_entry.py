@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import BaseModel
 
@@ -139,8 +141,10 @@ def test_list_return_error_has_dataset_hint(inspect_source):
         def main(input: In) -> list[In]:
             return []
     """)
-    assert code == 3 and "return `Dataset[Item]`" in out
-    assert "mobilerun_user_script." not in out
+    assert code == 3
+    message = json.loads(out)["error"]["message"]
+    assert "return `Dataset[Item]`" in message
+    assert "mobilerun_user_script." not in message
 
 
 def test_public_testing_context_and_state():
