@@ -112,6 +112,8 @@ class DatasetSink(Generic[SinkItemT]):
         return self._file.stats()["items"]
 
     def finish(self, result: Any) -> Any:
+        if self._file.path is None and self.count == 0:
+            return result
         if result is not None:
             from ._io import dumps_json
 

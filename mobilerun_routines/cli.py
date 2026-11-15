@@ -78,7 +78,7 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--device-platform",
         choices=DEVICE_PLATFORMS,
-        help="local device platform; needed with --device-url",
+        help="local device platform (default: android); ios uses its Portal",
     )
     run_p.add_argument("--device-url", help="Portal HTTP URL of a local device")
     run_p.add_argument("--deadline", type=datetime.fromisoformat)
