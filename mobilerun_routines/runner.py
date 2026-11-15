@@ -27,7 +27,8 @@ from pydantic import (
     ValidationError,
 )
 
-from ._io import atomic_write_text, dumps_json
+from ._contract import inspect_entry
+from ._io import atomic_write_text, dumps_json, one_line
 from ._validate import revalidate, validation_details
 from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State
 from .dataset import DatasetFile, DatasetSink
@@ -110,7 +111,7 @@ class _StateMeta(BaseModel):
 
 
 class _StateFile(BaseModel):
-    version: StrictInt
+    version: StrictInt = 1
     meta: _StateMeta
     data: Any
 
@@ -135,11 +136,15 @@ _UNFORMATTABLE = "error message could not be formatted"
 
 def _script_error_code(code: Any) -> str:
     """The script's code if it is well formed and not reserved, else `script_error`."""
-    if not isinstance(code, str):
-        return "script_error"
-    code = str.__str__(code)  # a plain str: a subclass could lie in `==`
-    if ERROR_CODE_PATTERN.fullmatch(code) and code not in RESERVED_ERROR_CODES:
-        return code
+    if isinstance(code, str):
+        normalised = str.__str__(code)  # a plain str: a subclass could lie in `==`
+        if ERROR_CODE_PATTERN.fullmatch(normalised) and normalised not in RESERVED_ERROR_CODES:
+            return normalised
+    sys.stderr.write(
+        "warning: ScriptError code '"
+        + one_line(code)
+        + "' is invalid or reserved; reported as script_error\n"
+    )
     return "script_error"
 
 
@@ -170,6 +175,8 @@ def _read_state(path: str | None) -> State:
         return State(configured=False)
     try:
         raw = Path(path).read_bytes()
+    except FileNotFoundError:
+        return State(configured=True)
     except OSError as exc:
         raise RunnerFault(f"cannot read state file: {exc}") from exc
     try:
@@ -199,6 +206,10 @@ def _serialise_result(entry: EntryPoint, value: Any) -> tuple[Any, dict[str, Any
             )
         return None, None
     if value is None:
+        if not entry.allows_none and entry.output_kind == "value":
+            return None, _failure(
+                "output_invalid", "returned None; annotate the return type as `Output | None`"
+            )
         return None, None
     try:
         # Instances are validated again: they may come from model_construct or have been
@@ -223,17 +234,6 @@ def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
     return result
 
 
-def _spill_to_dataset(
-    entry: EntryPoint, dataset: DatasetFile | None, result: Any
-) -> Any:
-    """With a dataset file the returned items follow the pushed ones and `result` is empty."""
-    if dataset is None or result is None or entry.output_kind != "dataset":
-        return result
-    for item in result["items"]:
-        dataset.append(dumps_json(item))
-    return None
-
-
 def _execute(
     entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None
 ) -> tuple[dict[str, Any], int]:
@@ -253,12 +253,13 @@ def _execute(
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
         if failure is None:
-            result = _spill_to_dataset(entry, dataset, result)
+            if entry.output_kind == "dataset":
+                result = ctx.dataset.finish(result)
     except (Exception, SystemExit) as exc:
         # ScriptError stays typed; anything else raised by script code or its validators and
         # serializers is a script_error.
         return _failure_from_exception(exc), EXIT_FAILED
-    if failure is None:
+    if failure is None and entry.output_kind != "dataset":
         failure = _size_failure(result, RESULT_MAX_BYTES, "result_too_large", "result")
     if failure is not None:
         return failure, EXIT_FAILED
@@ -318,6 +319,7 @@ def _run_script(opts: RunOptions, dataset: DatasetFile | None) -> tuple[dict[str
         raise RunnerFault(f"cannot read script: {exc}") from exc
     except ScriptImportError as exc:
         return _failure_from_exception(exc.original), EXIT_FAILED
+    inspect_entry(entry)
     return _execute(entry, opts, dataset)
 
 
@@ -345,6 +347,11 @@ def run(opts: RunOptions) -> int:
         if opts.echoed_input is not None:
             envelope["input"] = opts.echoed_input
         _write_envelope(opts.result_file, envelope)
+        if not envelope["ok"]:
+            error = envelope["error"]
+            details = error.get("details", [])
+            suffix = " " + dumps_json(details) if details else ""
+            sys.stderr.write(one_line(f"error {error['code']}: {error['message']}{suffix}") + "\n")
         return code
     finally:
         cancellation.restore()

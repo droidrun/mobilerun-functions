@@ -112,11 +112,24 @@ def test_pushed_invalid_dict_does_not_leak_values(run_script, dataset_file):
     assert "SECRET" not in json.dumps(r.envelope) and "nope" not in json.dumps(r.envelope)
 
 
-def test_push_without_the_flag_is_not_available(run_script):
-    r = run_script(ds_script(PUSH_TWO))
-    assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.dataset.push")
+def test_push_without_file_buffers_before_returned_items(run_script):
+    r = run_script(ds_script(PUSH_TWO + '\nreturn Dataset(items=[Item(id="c")])'))
+    assert r.code == 0
+    assert [item["id"] for item in r.envelope["result"]["items"]] == ["a", "b", "c"]
     assert "dataset" not in r.envelope
+
+
+def test_buffer_rejects_invalid_items_without_leaking_values(run_script):
+    r = run_script(ds_script('ctx.dataset.push({"id": "SECRET", "price": "not-a-price"})'))
+    assert r.code == 1 and r.envelope["error"]["code"] == "output_invalid"
+    assert "SECRET" not in json.dumps(r.envelope)
+    assert "not-a-price" not in json.dumps(r.envelope)
+
+
+def test_buffer_limit_counts_multibyte_utf8(run_script, monkeypatch):
+    monkeypatch.setattr("mobilerun_routines.dataset.DATASET_MAX_BYTES", _line_bytes(1))
+    r = run_script(ds_script('ctx.dataset.push(Item(id="é"))'))
+    assert r.code == 1 and r.envelope["error"]["code"] == "dataset_too_large"
 
 
 @pytest.mark.parametrize("ret", ["Out", None], ids=["value", "none"])
@@ -500,3 +513,49 @@ def test_cancellation_wins_over_what_the_script_does_afterwards(write_script, tm
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
     assert without_input(json.loads((tmp_path / "out.json").read_text())) == CANCELLED
+
+
+def test_dataset_none_without_push_is_empty_in_buffer(run_script):
+    r = run_script(ds_script("return None", ret="Dataset[Item]"))
+    assert r.code == 0 and r.envelope["result"] == {"items": []}
+
+
+def test_dataset_none_without_push_is_empty_in_file(run_script, dataset_file):
+    r = run_script(ds_script("return None", ret="Dataset[Item]"),
+                   extra_args=["--dataset-file", str(dataset_file)])
+    assert r.code == 0 and r.envelope["result"] is None
+    assert lines(dataset_file) == []
+
+
+def test_returning_none_after_push_keeps_buffered_items(run_script):
+    r = run_script(ds_script(PUSH_TWO + "\nreturn None", ret="Dataset[Item]"))
+    assert r.code == 0
+    assert [item["id"] for item in r.envelope["result"]["items"]] == ["a", "b"]
+
+
+def test_returning_none_after_push_keeps_file_items(run_script, dataset_file):
+    r = run_script(ds_script(PUSH_TWO + "\nreturn None", ret="Dataset[Item]"),
+                   extra_args=["--dataset-file", str(dataset_file)])
+    assert r.code == 0 and r.envelope["result"] is None
+    assert [item["id"] for item in lines(dataset_file)] == ["a", "b"]
+
+
+@pytest.mark.parametrize("body", [
+    'ctx.dataset.push({"id": "x" * input.n})',
+    'return Dataset(items=[{"id": "x" * input.n}])',
+])
+def test_buffer_dataset_exactly_at_limit_succeeds(run_script, body):
+    id_len = DATASET_MAX_BYTES - _line_bytes(0)
+    r = run_script(ds_script(body, ret="Dataset[Item]"), {"n": id_len})
+    assert r.code == 0
+    assert r.envelope["result"] == {"items": [{"id": "x" * id_len, "price": 0.0}]}
+
+
+@pytest.mark.parametrize("body", [
+    'ctx.dataset.push({"id": "x" * input.n})',
+    'return Dataset(items=[{"id": "x" * input.n}])',
+])
+def test_buffer_dataset_one_byte_over_limit_fails(run_script, body):
+    id_len = DATASET_MAX_BYTES - _line_bytes(0) + 1
+    r = run_script(ds_script(body, ret="Dataset[Item]"), {"n": id_len})
+    assert r.code == 1 and r.envelope["error"]["code"] == "dataset_too_large"

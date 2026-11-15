@@ -19,6 +19,7 @@ NO_ENTRY_POINT = "no_entry_point"
 ENTRY_POINT_INVALID = "entry_point_invalid"
 IMPORT_FAILED = "import_failed"
 SCHEMA_UNSUPPORTED = "schema_unsupported"
+RETURN_ANNOTATION_MISSING = "return_annotation_missing"
 # Codes of the issues `inspect` reports (documented in the README).
 INSPECT_ERROR_CODES = (
     SYNTAX_ERROR,

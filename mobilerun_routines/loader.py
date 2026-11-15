@@ -6,10 +6,9 @@ import sys
 import types
 from pathlib import Path
 
+from ._constants import MODULE_NAME
 from .entry import EntryPoint, take
 from .errors import NO_ENTRY_POINT_MESSAGE, EntryPointError, NoEntryPointError
-
-MODULE_NAME = "mobilerun_user_script"
 
 
 class ScriptImportError(Exception):

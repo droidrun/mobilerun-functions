@@ -31,7 +31,7 @@ def test_readme_lists_exactly_the_inspect_codes():
 def test_the_script_format_example_is_a_valid_script(tmp_path, capsys):
     from mobilerun_routines import cli
 
-    section = README.split("## Script format")[1].split("## Commands")[0]
+    section = README.split("## Hello")[1].split("## Test a script")[0]
     example = re.search(r"```python\n(.*?)```", section, re.S)
     assert example
     path = tmp_path / "format.py"
@@ -44,7 +44,8 @@ def test_the_script_format_example_is_a_valid_script(tmp_path, capsys):
 def test_the_readme_sample_is_a_valid_script(tmp_path, capsys):
     from mobilerun_routines import cli
 
-    sample = re.search(r"```python\n(.*?)```", README, re.S)
+    section = README.split("### Dataset example")[1].split("## Context reference")[0]
+    sample = re.search(r"```python\n(.*?)```", section, re.S)
     assert sample
     path = tmp_path / "sample.py"
     path.write_text(sample.group(1))
@@ -57,3 +58,27 @@ def test_the_readme_sample_is_a_valid_script(tmp_path, capsys):
         "name",
         "unitPrice",
     }
+
+
+def test_readme_section_order():
+    headings = re.findall(r"^## (.+)$", README, re.M)
+    assert headings == [
+        "Install",
+        "Hello",
+        "Test a script",
+        "State between runs",
+        "Datasets",
+        "Context reference",
+        "Commands reference",
+        "Platform contract",
+        "Development",
+    ]
+
+
+def test_readme_state_example_runs_twice(run_script):
+    section = README.split("## State between runs")[1].split("## Datasets")[0]
+    source = re.search(r"```python\n(.*?)```", section, re.S).group(1)
+    first = run_script(source, state=None)
+    second = run_script(source, state=first.envelope["state"])
+    assert first.envelope["result"] == {"count": 1}
+    assert second.envelope["result"] == {"count": 2}

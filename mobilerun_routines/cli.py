@@ -21,8 +21,8 @@ from ._check import (
     runtime_issue,
     syntax_issue,
 )
+from ._contract import inspect_entry
 from ._template import STARTER_SCRIPT
-from ._version import SDK_VERSION
 from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
 from .errors import EntryPointError, NoEntryPointError
 from .loader import ScriptImportError, ScriptSyntaxError, load_script
@@ -34,7 +34,7 @@ from .runner import (
     RunOptions,
     run,
 )
-from .schema import SchemaError, dataset_key, input_schema, output_schema
+from .schema import SchemaError
 
 MODES = get_args(RunMode)
 DEVICE_TARGETS = get_args(DeviceTarget)
@@ -78,7 +78,7 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument(
         "--device-platform",
         choices=DEVICE_PLATFORMS,
-        help="local device platform; needed with --device-url",
+        help="local device platform (default: android); ios uses its Portal",
     )
     run_p.add_argument("--device-url", help="Portal HTTP URL of a local device")
     run_p.add_argument("--deadline", type=datetime.fromisoformat)
@@ -104,46 +104,42 @@ def _inspect(path: str) -> int:
     try:
         source = Path(path).read_bytes()
     except OSError as exc:
-        return _reject([Issue(IMPORT_FAILED, f"cannot read script: {exc}")])
+        return _reject(_issues(exc, b"", path))
     try:
         # The script runs at import: what it prints must not end up in the JSON on stdout.
         with contextlib.redirect_stdout(sys.stderr):
             entry = load_script(path)
-            output = output_schema(entry.output_model) if entry.output_model else None
-            document = {
-                "ok": True,
-                "entrypoint": entry.name,
-                "async": entry.is_async,
-                "inputSchema": input_schema(entry.input_model),
-                "outputSchema": output,
-                "outputKind": entry.output_kind,
-                "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
-                "sdkVersion": SDK_VERSION,
-                "warnings": [],
-            }
-    except OSError as exc:
-        return _reject([Issue(IMPORT_FAILED, f"cannot read script: {exc}")])
-    except NoEntryPointError as exc:
-        issue = Issue(NO_ENTRY_POINT, str(exc), hint=SCRIPT_HINT)
-        return _reject(explain(issue, source, path))
-    except EntryPointError as exc:
-        issue = runtime_issue(ENTRY_POINT_INVALID, str(exc), exc, path)
-        return _reject(explain(issue, source, path))
-    except ScriptSyntaxError as exc:
-        return _reject([syntax_issue(exc.original)])
-    except ScriptImportError as exc:
-        message = f"{type(exc.original).__name__}: {exc.original}"
-        issue = runtime_issue(IMPORT_FAILED, message, exc.original, path)
-        # Only the setup mistakes are explained further; any other failure is the script's own.
-        return _reject(explain(issue, source, path) if issue.hint else [issue])
-    except SchemaError as exc:
-        return _reject([Issue(SCHEMA_UNSUPPORTED, str(exc))])
+            document = inspect_entry(entry)
+    except (OSError, EntryPointError, ScriptImportError, SchemaError) as exc:
+        return _reject(_issues(exc, source, path))
     sys.stdout.write(json.dumps(document) + "\n")
     return EXIT_OK
 
 
-def _reject(errors: list[Issue]) -> int:
-    """Report why `inspect` failed: a JSON document on stdout, one line per error on stderr.
+def _issues(
+    exc: OSError | EntryPointError | ScriptImportError | SchemaError,
+    source: bytes,
+    path: str,
+) -> list[Issue]:
+    """Map load and contract failures to the same diagnostics for inspect and run."""
+    if isinstance(exc, OSError):
+        return [Issue(IMPORT_FAILED, f"cannot read script: {exc}")]
+    if isinstance(exc, NoEntryPointError):
+        return explain(Issue(NO_ENTRY_POINT, str(exc), hint=SCRIPT_HINT), source, path)
+    if isinstance(exc, EntryPointError):
+        issue = runtime_issue(ENTRY_POINT_INVALID, str(exc), exc, path)
+        return explain(issue, source, path)
+    if isinstance(exc, ScriptSyntaxError):
+        return [syntax_issue(exc.original)]
+    if isinstance(exc, ScriptImportError):
+        message = f"{type(exc.original).__name__}: {exc.original}"
+        issue = runtime_issue(IMPORT_FAILED, message, exc.original, path)
+        return explain(issue, source, path) if issue.hint else [issue]
+    return [Issue(SCHEMA_UNSUPPORTED, str(exc))]
+
+
+def _reject(errors: list[Issue], *, json_output: bool = True) -> int:
+    """Report issues on stderr and, for inspect, a JSON failure document on stdout.
 
     `error` is the first of `errors`, the shape callers read before `errors` existed.
     """
@@ -153,7 +149,8 @@ def _reject(errors: list[Issue]) -> int:
         "errors": [issue.as_json() for issue in errors],
         "warnings": [],
     }
-    sys.stdout.write(json.dumps(document) + "\n")
+    if json_output:
+        sys.stdout.write(json.dumps(document) + "\n")
     for issue in errors:
         sys.stderr.write(issue.describe() + "\n")
     return EXIT_NO_ENTRY_POINT
@@ -180,9 +177,8 @@ def _run(args: argparse.Namespace) -> int:
     )
     try:
         return run(opts)
-    except EntryPointError as exc:
-        sys.stderr.write(f"{exc}\n")
-        return EXIT_NO_ENTRY_POINT
+    except (EntryPointError, SchemaError) as exc:
+        return _reject(_issues(exc, Path(args.path).read_bytes(), args.path), json_output=False)
     except RunnerFault as exc:
         sys.stderr.write(f"{exc}\n")
         return EXIT_RUNNER_FAULT

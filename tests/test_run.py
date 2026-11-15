@@ -408,8 +408,9 @@ DATASET = script_source(
     'return Dataset(items=[Item(id="a", price=1.5), {"id": "b", "price": 2}])',
     ret="Dataset[Item]",
     before="""
+    from mobilerun_routines import key_field
     class Item(BaseModel):
-        id: str
+        id: str = key_field()
         price: float
     """,
 )
@@ -448,7 +449,10 @@ def test_state_flag_absent(run_script):
 def test_state_save_without_flag_raises(run_script):
     r = run_script(STATE_SCRIPT, {"name": "save"})
     assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.state.save")
+    assert r.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.state.save is not available in this run: "
+        "pass --state-file PATH to run"
+    )
 
 
 def test_state_null(run_script):
@@ -668,3 +672,55 @@ def test_an_input_that_is_not_json_is_left_out_and_the_run_is_unchanged(run_scri
         "outcome": "succeeded",
         "result": {"n": 1.0},
     }
+
+
+def test_state_missing_file_then_envelope_round_trip(run_script, tmp_path):
+    first = run_script(
+        STATE_SCRIPT, {"name": "save"}, extra_args=["--state-file", str(tmp_path / "missing.json")]
+    )
+    assert first.code == 0
+    assert first.err.splitlines() == ["[INFO] prev=None schema=None"]
+    second = run_script(STATE_SCRIPT, state=first.envelope["state"])
+    assert second.code == 0
+    assert second.err.splitlines() == ["[INFO] prev={'seen': ['a', 'b'], 'n': 1} schema=2"]
+
+
+def test_failed_runs_have_one_stderr_summary(run_script):
+    r = run_script(script_source('raise ScriptError("bad", "two\\nlines")'))
+    assert r.code == 1
+    assert r.err.splitlines() == [r"error bad: two\nlines"]
+
+
+def test_output_failure_stderr_details_are_redacted(run_script):
+    r = run_script(script_source('return {"greeting": 123}'))
+    assert r.code == 1
+    assert r.err.splitlines() == [
+        'error output_invalid: the return value does not match Out '
+        '[{"path":"greeting","message":"string_type"}]'
+    ]
+    assert "123" not in r.err
+
+
+def test_input_failure_stderr_details_are_redacted(run_script):
+    r = run_script(script_source(), {"count": "SECRET"})
+    assert r.code == 2 and r.err.startswith("error input_invalid:")
+    assert "count" in r.err and "int_parsing" in r.err and "SECRET" not in r.err
+
+
+def test_required_output_rejects_none(run_script):
+    r = run_script(script_source())
+    assert r.code == 1 and r.envelope["error"] == {
+        "code": "output_invalid",
+        "message": "returned None; annotate the return type as `Output | None`",
+        "retryable": False,
+    }
+
+
+def test_missing_return_annotation_warns_but_runs(inspect_source, run_script):
+    source = script_source(ret=None)
+    code, out, _ = inspect_source(source)
+    assert code == 0
+    warnings = json.loads(out)["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "return_annotation_missing"
+    assert run_script(source).code == 0

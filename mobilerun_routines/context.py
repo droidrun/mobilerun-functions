@@ -7,14 +7,17 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, StrictInt, TypeAdapter
+from pydantic import BaseModel, JsonValue, StrictInt, TypeAdapter
 
-from ._io import atomic_write_text, dumps_json
+from ._io import atomic_write_text, dumps_json, one_line
 from .dataset import DatasetSink
 from .device import connect_device
 from .errors import NotAvailableError
+
+if TYPE_CHECKING:
+    from mobilerun_core import Device
 
 RESULT_MAX_BYTES = 524288
 STATE_MAX_BYTES = 524288
@@ -29,25 +32,21 @@ _STRICT_INT = TypeAdapter(StrictInt)
 
 @dataclass(frozen=True)
 class RunInfo:
-    run_id: str
-    attempt: int
-    deadline: datetime | None
-    mode: RunMode
-    device_id: str | None
+    run_id: str = "local"
+    attempt: int = 1
+    deadline: datetime | None = None
+    mode: RunMode = "live"
+    device_id: str | None = None
     device_target: DeviceTarget = "cloud"
     device_platform: DevicePlatform | None = None
     device_url: str | None = None
-
-
-def _one_line(msg: object) -> str:
-    return str(msg).replace("\r", "\\r").replace("\n", "\\n")
 
 
 class Log:
     """Log lines go to stderr; `status` publishes the latest status through a file."""
 
     def _write(self, level: str, msg: object) -> None:
-        sys.stderr.write(f"[{level}] {_one_line(msg)}\n")
+        sys.stderr.write(f"[{level}] {one_line(msg)}\n")
         sys.stderr.flush()
 
     def info(self, msg: object) -> None:
@@ -64,7 +63,7 @@ class Log:
         if not path:
             return
         try:
-            atomic_write_text(path, _one_line(msg) + "\n")
+            atomic_write_text(path, one_line(msg) + "\n")
         except OSError:
             pass  # status is best effort and never fails the script
 
@@ -82,8 +81,8 @@ class State:
 
     def __init__(
         self,
-        configured: bool = False,
-        previous: Any = None,
+        configured: bool = True,
+        previous: JsonValue = None,
         previous_schema: int | None = None,
     ) -> None:
         self._configured = configured
@@ -92,7 +91,7 @@ class State:
         self._saved: StateSnapshot | None = None
 
     @property
-    def previous(self) -> Any:
+    def previous(self) -> JsonValue:
         """Saved data of the last successful run, or `None`."""
         return self._previous
 
@@ -104,7 +103,9 @@ class State:
     def save(self, data: Any, schema: int = 1) -> None:
         """Record the snapshot the platform stores after a successful run (last call wins)."""
         if not self._configured:
-            raise NotAvailableError("state.save")
+            raise NotAvailableError(
+                "state.save", "is not available in this run: pass --state-file PATH to run"
+            )
         schema = _STRICT_INT.validate_python(schema)
         payload = data.model_dump_json() if isinstance(data, BaseModel) else dumps_json(data)
         # Copy now so later changes to `data` do not alter the snapshot.
@@ -142,7 +143,7 @@ class Context:
     def partial_reason(self) -> str | None:
         return self._partial_reason
 
-    def device(self) -> Any:
+    def device(self) -> Device:
         """The run's `mobilerun_core` device (connected once, then reused)."""
         if self._device is None:
             self._device = connect_device(
