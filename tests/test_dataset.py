@@ -1,4 +1,4 @@
-"""B4 (one incomplete signal), B5 (SIGTERM) and D1 (incremental dataset output)."""
+"""Partial results, incremental dataset output, and cancellation."""
 
 import json
 import signal
@@ -51,7 +51,7 @@ def lines(path: Path) -> list[dict]:
 
 PUSH_TWO = 'ctx.dataset.push(Item(id="a", price=1.5))\nctx.dataset.push({"id": "b", "price": 2})'
 
-# B4
+# Incomplete datasets are reported through partial results
 
 
 def test_dataset_has_only_items():
@@ -67,7 +67,7 @@ def test_incomplete_list_is_reported_with_partial(run_script):
     assert r.envelope["result"] == {"items": [{"id": "a", "price": 0.0}]}
 
 
-# D1: push to the dataset file
+# Pushed items are validated and written incrementally
 
 
 def test_push_writes_one_json_line_per_item(run_script, dataset_file):
@@ -202,7 +202,7 @@ def test_unwritable_dataset_file_is_a_runner_fault(run_script, tmp_path):
     assert r.code == 64 and r.envelope is None
 
 
-# D1: size cap
+# Dataset size limits preserve previously written lines
 
 def _line_bytes(id_len: int) -> int:
     return len(json.dumps({"id": "x" * id_len, "price": 0.0}, separators=(",", ":"))) + 1
@@ -273,7 +273,7 @@ def test_a_returned_dataset_at_the_limit_fits_and_one_byte_over_fails(run_script
     assert dataset_file.read_text() == ""
 
 
-# B5: SIGTERM leaves a result
+# SIGTERM leaves a cancelled result and complete dataset lines
 
 
 def _spawn(script: Path, tmp_path: Path, *, dataset: bool) -> tuple[subprocess.Popen, Path, Path]:
@@ -359,7 +359,7 @@ def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
     assert signal.getsignal(signal.SIGTERM) is before
 
 
-# Fix round 1: pushed items, interrupted and concurrent appends, cancellation wins
+# Pushed aliases, safe appends, and cancellation precedence
 
 OVERLAP_MODELS = """
 from mobilerun_routines import key_field

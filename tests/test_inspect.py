@@ -237,7 +237,7 @@ def test_inspect_error_message_is_one_line_in_json(inspect_source):
     assert code == 3 and "\n" not in _failure(out)["message"]
 
 
-# D2: formats
+# Supported schema formats are preserved and validated
 
 FORMAT_CASES = {
     "date-time": ("when: datetime", "from datetime import datetime"),
@@ -288,7 +288,7 @@ def test_run_validates_formatted_input_with_the_model(run_script):
     assert "yesterday" not in json.dumps(bad.envelope)
 
 
-# D3: dataset key
+# Dataset keys identify one string or integer field
 
 
 def _dataset(item_fields: str, *, extra: str = "") -> str:
@@ -387,7 +387,7 @@ def test_a_key_on_a_non_dataset_output_is_ignored(inspect_source):
     assert code == 0 and doc["datasetKey"] is None and doc["outputKind"] == "value"
 
 
-# Fix round 1: stdout is exactly one JSON document
+# Import-time prints leave stdout as one JSON document
 
 def test_a_top_level_print_does_not_corrupt_inspect_output(inspect_source):
     code, out, err = inspect_source('print("user diagnostic")\n' + SAMPLE)
