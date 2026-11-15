@@ -1,5 +1,7 @@
 """What `inspect` reports when a script fails: issues with codes, lines and repair hints.
 
+`issues_for` maps loader and contract exceptions to issues for both `inspect` and `run`.
+
 The loader decides whether a script is valid. When it rejects one, `explain` reads the source as
 a syntax tree (it never runs the code) to name the usual newcomer mistakes more precisely.
 """
@@ -86,8 +88,8 @@ def runtime_issue(code: str, message: str, exc: BaseException, path: str) -> Iss
     It has the line of the script frame in the traceback, and the repair hint when `exc`
     is one of the usual setup mistakes.
     """
-    use_hint = is_setup_mistake(exc)
-    return Issue(code, message, _script_line(exc, path), SCRIPT_HINT if use_hint else None)
+    hint = SCRIPT_HINT if is_setup_mistake(exc) else None
+    return Issue(code, message, _script_line(exc, path), hint)
 
 
 def issues_for(

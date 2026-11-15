@@ -30,7 +30,7 @@ from pydantic import (
 from ._contract import inspect_entry
 from ._io import atomic_write_text, dumps_json, one_line
 from ._validate import revalidate, validation_details
-from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State
+from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State, StateSnapshot
 from .dataset import DatasetFile, DatasetSink
 from .entry import EntryPoint
 from .errors import (
@@ -117,20 +117,21 @@ class _StateFile(BaseModel):
 
 
 _STATE_FILE = TypeAdapter(_StateFile | None)
+_UNSET = object()
 
 
 def _failure(
     code: str,
     message: str,
     retryable: bool = False,
-    details: list[dict[str, Any]] | None = None,
+    details: Any = _UNSET,
 ) -> dict[str, Any]:
     error: dict[str, Any] = {
         "code": code,
         "message": str.__str__(message)[:ERROR_MESSAGE_MAX_CHARS],
         "retryable": retryable,
     }
-    if details is not None:
+    if details is not _UNSET:
         error["details"] = details
     return {"ok": False, "error": error}
 
@@ -239,7 +240,7 @@ def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
 
 
 def _execute(
-    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None, extras: dict[str, Any]
+    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any]
 ) -> tuple[dict[str, Any], int]:
     state = _read_state(opts.state_file)
     raw_input = _read_input(opts.input_file)
@@ -256,7 +257,7 @@ def _execute(
         # Capture before script code can change the model; keep it even after cancellation.
         echoed_input = _echo_input(model_input)
         if echoed_input is not None:
-            extras["input"] = echoed_input
+            input_echo["input"] = echoed_input
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
         if failure is not None:
@@ -271,22 +272,25 @@ def _execute(
         failure = _size_failure(result, RESULT_MAX_BYTES, "result_too_large", "result")
         if failure is not None:
             return failure, EXIT_FAILED
-    return _success_envelope(result, ctx, state)
-
-
-def _success_envelope(result: Any, ctx: Context, state: State) -> tuple[dict[str, Any], int]:
-    envelope: dict[str, Any] = {"ok": True, "outcome": "succeeded"}
-    if ctx.partial_reason is not None:
-        envelope["outcome"] = "partial"
-        envelope["partialReason"] = ctx.partial_reason[:ERROR_MESSAGE_MAX_CHARS]
-    envelope["result"] = result
     saved = state.saved
     if saved is not None:
         failure = _size_failure(saved.data, STATE_MAX_BYTES, "state_too_large", "state")
         if failure is not None:
             return failure, EXIT_FAILED
+    return _success_envelope(result, ctx.partial_reason, saved), EXIT_OK
+
+
+def _success_envelope(
+    result: Any, partial_reason: str | None, saved: StateSnapshot | None
+) -> dict[str, Any]:
+    envelope: dict[str, Any] = {"ok": True, "outcome": "succeeded"}
+    if partial_reason is not None:
+        envelope["outcome"] = "partial"
+        envelope["partialReason"] = partial_reason[:ERROR_MESSAGE_MAX_CHARS]
+    envelope["result"] = result
+    if saved is not None:
         envelope["state"] = {"meta": {"schema": saved.schema}, "data": saved.data}
-    return envelope, EXIT_OK
+    return envelope
 
 
 def _echo_input(model_input: BaseModel) -> dict[str, Any] | None:
@@ -320,7 +324,7 @@ def _open_dataset_file(path: str | None) -> DatasetFile | None:
 
 
 def _run_script(
-    opts: RunOptions, dataset: DatasetFile | None, extras: dict[str, Any]
+    opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any]
 ) -> tuple[dict[str, Any], int]:
     try:
         entry = load_script(opts.path)
@@ -329,7 +333,7 @@ def _run_script(
     except ScriptImportError as exc:
         return _failure_from_exception(exc.original), EXIT_FAILED
     inspect_entry(entry)
-    return _execute(entry, opts, dataset, extras)
+    return _execute(entry, opts, dataset, input_echo)
 
 
 def run(opts: RunOptions) -> int:
@@ -341,11 +345,11 @@ def run(opts: RunOptions) -> int:
     cancellation = _Cancellation()
     cancellation.install()
     dataset = None
-    extras: dict[str, Any] = {}
+    input_echo: dict[str, Any] = {}
     try:
         dataset = _open_dataset_file(opts.dataset_file)
         try:
-            envelope, code = _run_script(opts, dataset, extras)
+            envelope, code = _run_script(opts, dataset, input_echo)
             cancellation.disarm()
         except _Cancelled:
             pass
@@ -354,7 +358,8 @@ def run(opts: RunOptions) -> int:
         if dataset is not None:
             dataset.finalise()
             envelope["dataset"] = dataset.stats()
-        envelope.update(extras)
+        if "input" in input_echo:
+            envelope["input"] = input_echo["input"]
         _write_envelope(opts.result_file, envelope)
         if not envelope["ok"]:
             error = envelope["error"]
