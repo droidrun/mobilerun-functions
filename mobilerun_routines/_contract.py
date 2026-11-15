@@ -20,6 +20,10 @@ def inspect_entry(entry: EntryPoint) -> dict[str, Any]:
         "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
         "sdkVersion": SDK_VERSION,
         "warnings": [
-            Issue("return_annotation_missing", "annotate the return type; no output is assumed").as_json()
-        ] if entry.return_annotation_missing else [],
+            Issue(
+                "return_annotation_missing", "annotate the return type; no output is assumed"
+            ).as_json()
+        ]
+        if entry.return_annotation_missing
+        else [],
     }

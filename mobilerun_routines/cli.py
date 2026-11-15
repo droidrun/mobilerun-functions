@@ -21,8 +21,8 @@ from ._check import (
     runtime_issue,
     syntax_issue,
 )
-from ._template import STARTER_SCRIPT
 from ._contract import inspect_entry
+from ._template import STARTER_SCRIPT
 from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
 from .errors import EntryPointError, NoEntryPointError
 from .loader import ScriptImportError, ScriptSyntaxError, load_script

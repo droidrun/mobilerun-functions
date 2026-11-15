@@ -7,14 +7,17 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, StrictInt, TypeAdapter
+from pydantic import BaseModel, JsonValue, StrictInt, TypeAdapter
 
 from ._io import atomic_write_text, dumps_json
 from .dataset import DatasetSink
 from .device import connect_device
 from .errors import NotAvailableError
+
+if TYPE_CHECKING:
+    from mobilerun_core import Device
 
 RESULT_MAX_BYTES = 524288
 STATE_MAX_BYTES = 524288
@@ -83,7 +86,7 @@ class State:
     def __init__(
         self,
         configured: bool = False,
-        previous: Any = None,
+        previous: JsonValue = None,
         previous_schema: int | None = None,
     ) -> None:
         self._configured = configured
@@ -92,7 +95,7 @@ class State:
         self._saved: StateSnapshot | None = None
 
     @property
-    def previous(self) -> Any:
+    def previous(self) -> JsonValue:
         """Saved data of the last successful run, or `None`."""
         return self._previous
 
@@ -125,7 +128,7 @@ class Context:
         run: RunInfo,
         log: Log | None = None,
         state: State | None = None,
-        dataset: DatasetSink | None = None,
+        dataset: DatasetSink[BaseModel] | None = None,
     ) -> None:
         self.run = run
         self.log = log if log is not None else Log()
@@ -144,7 +147,7 @@ class Context:
     def partial_reason(self) -> str | None:
         return self._partial_reason
 
-    def device(self) -> Any:
+    def device(self) -> Device:
         """The run's `mobilerun_core` device (connected once, then reused)."""
         if self._device is None:
             self._device = connect_device(

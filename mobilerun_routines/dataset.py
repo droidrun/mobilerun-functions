@@ -18,6 +18,7 @@ DATASET_MAX_BYTES = 524288
 KEY_MARKER = "x-mobilerun-key"
 
 ItemT = TypeVar("ItemT")
+SinkItemT = TypeVar("SinkItemT", bound=BaseModel)
 
 
 class Dataset(BaseModel, Generic[ItemT]):
@@ -94,7 +95,7 @@ class DatasetFile:
         self._fh.close()
 
 
-class DatasetSink:
+class DatasetSink(Generic[SinkItemT]):
     """`ctx.dataset`: push items to the dataset file as the script finds them.
 
     `item_type` is the `Item` of the entry point's `Dataset[Item]` return annotation, or `None`
@@ -118,7 +119,7 @@ class DatasetSink:
                 self._file.append(dumps_json(item))
         return {"items": self._file.buffered_items()} if self._file.path is None else None
 
-    def push(self, item: Any) -> None:
+    def push(self, item: SinkItemT | dict[str, Any]) -> None:
         """Validate `item` against the dataset's item model and append it as one line.
 
         Raises `DatasetItemInvalidError` for an invalid item and `DatasetTooLargeError` when the

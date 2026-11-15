@@ -122,7 +122,9 @@ def test_push_without_file_buffers_before_returned_items(run_script):
 def test_buffer_validates_items_and_enforces_byte_limit(run_script, monkeypatch):
     invalid = run_script(ds_script('ctx.dataset.push({"id": 123})'))
     assert invalid.envelope["error"]["code"] == "output_invalid"
-    monkeypatch.setattr("mobilerun_routines.dataset.DATASET_MAX_BYTES", len(b'{"id":"a","price":0.0}\n'))
+    monkeypatch.setattr(
+        "mobilerun_routines.dataset.DATASET_MAX_BYTES", len(b'{"id":"a","price":0.0}\n')
+    )
     exact = run_script(ds_script('ctx.dataset.push(Item(id="a"))'))
     assert exact.code == 0
     over = run_script(ds_script('ctx.dataset.push(Item(id="é"))'))
@@ -200,6 +202,7 @@ def test_unwritable_dataset_file_is_a_runner_fault(run_script, tmp_path):
 
 
 # D1: size cap
+
 
 def _line_bytes(id_len: int) -> int:
     return len(json.dumps({"id": "x" * id_len, "price": 0.0}, separators=(",", ":"))) + 1

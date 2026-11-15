@@ -142,7 +142,8 @@ def _script_error_code(code: Any) -> str:
     if ERROR_CODE_PATTERN.fullmatch(code) and code not in RESERVED_ERROR_CODES:
         return code
     sys.stderr.write(
-        "warning: ScriptError code '" + _one_line(code)
+        "warning: ScriptError code '"
+        + _one_line(code)
         + "' is invalid or reserved; reported as script_error\n"
     )
     return "script_error"
@@ -195,7 +196,9 @@ def _read_input(path: str) -> bytes:
         raise RunnerFault(f"cannot read input file: {exc}") from exc
 
 
-def _serialise_result(entry: EntryPoint, value: Any, pushed: bool = False) -> tuple[Any, dict[str, Any] | None]:
+def _serialise_result(
+    entry: EntryPoint, value: Any, pushed: bool = False
+) -> tuple[Any, dict[str, Any] | None]:
     """Return `(result_json, failure)`; failure is set when the value breaks the contract."""
     model = entry.output_model
     if model is None:

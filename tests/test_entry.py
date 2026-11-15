@@ -127,3 +127,17 @@ def test_rejects_duplicate():
         @script
         def second(input: In) -> None:
             pass
+
+
+def test_list_return_error_has_dataset_hint(inspect_source):
+    code, out, _ = inspect_source("""
+        from pydantic import BaseModel
+        from mobilerun_routines import script
+        class In(BaseModel):
+            pass
+        @script
+        def main(input: In) -> list[In]:
+            return []
+    """)
+    assert code == 3 and "return `Dataset[Item]`" in out
+    assert "mobilerun_user_script." not in out

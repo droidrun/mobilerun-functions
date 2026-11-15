@@ -637,7 +637,7 @@ def test_an_import_time_failure_has_no_input_field(run_script):
 
 def test_a_huge_input_is_left_out_and_the_run_is_unchanged(run_script):
     big = "x" * (800 * 1024)
-    r = run_script(script_source('return Out(greeting=input.name[:3])'), {"name": big})
+    r = run_script(script_source("return Out(greeting=input.name[:3])"), {"name": big})
     assert r.code == 0 and without_input(r.envelope) == {
         "ok": True,
         "outcome": "succeeded",
@@ -672,8 +672,9 @@ def test_an_input_that_is_not_json_is_left_out_and_the_run_is_unchanged(run_scri
 
 
 def test_state_missing_file_then_envelope_round_trip(run_script, tmp_path):
-    first = run_script(STATE_SCRIPT, {"name": "save"},
-                       extra_args=["--state-file", str(tmp_path / "missing.json")])
+    first = run_script(
+        STATE_SCRIPT, {"name": "save"}, extra_args=["--state-file", str(tmp_path / "missing.json")]
+    )
     assert first.code == 0
     second = run_script(STATE_SCRIPT, state=first.envelope["state"])
     assert second.code == 0 and "schema=2" in second.err
@@ -684,10 +685,13 @@ def test_state_save_without_flag_explains_configuration(run_script):
     assert "pass --state-file PATH to run" in r.envelope["error"]["message"]
 
 
-@pytest.mark.parametrize("body,code", [
-    ('raise ScriptError("bad", "two\\nlines")', "bad"),
-    ('return {"greeting": 123}', "output_invalid"),
-])
+@pytest.mark.parametrize(
+    "body,code",
+    [
+        ('raise ScriptError("bad", "two\\nlines")', "bad"),
+        ('return {"greeting": 123}', "output_invalid"),
+    ],
+)
 def test_failed_runs_have_one_stderr_summary(run_script, body, code):
     r = run_script(script_source(body))
     summaries = [line for line in r.err.splitlines() if line.startswith("error ")]

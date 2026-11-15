@@ -5,14 +5,17 @@ from __future__ import annotations
 import inspect
 import types
 import typing
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeVar, cast
 
 from pydantic import BaseModel
 
 from .context import Context
 from .dataset import Dataset
 from .errors import EntryPointError
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 OutputKind = Literal["value", "dataset", "none"]
 
@@ -63,7 +66,7 @@ def _is_model(tp: Any) -> bool:
 
 
 def _describe(tp: Any) -> str:
-    return tp.__name__ if isinstance(tp, type) else repr(tp)
+    return (tp.__name__ if isinstance(tp, type) else repr(tp)).replace("mobilerun_user_script.", "")
 
 
 def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
@@ -79,7 +82,12 @@ def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
     if not _is_model(tp):
         raise EntryPointError(
             f"return: annotation must be a pydantic BaseModel subclass, "
-            f"'OutputModel | None' or None, got {_describe(tp)}"
+            f"'OutputModel | None', Dataset[Item] or None, got {_describe(tp)}"
+            + (
+                "; return `Dataset[Item]` for a list of items"
+                if typing.get_origin(tp) is list
+                else ""
+            )
         )
     return tp
 
@@ -137,15 +145,12 @@ def _build(func: Any) -> EntryPoint:
         takes_ctx=takes_ctx,
         input_model=input_model,
         output_model=output_model,
-        allows_none=(
-            output_model is None
-            or type(None) in typing.get_args(hints.get("return"))
-        ),
+        allows_none=(output_model is None or type(None) in typing.get_args(hints.get("return"))),
         return_annotation_missing="return" not in hints,
     )
 
 
-def script(func: Any = None) -> Any:
+def script(func: F = cast(F, None)) -> F:  # noqa: B008 - preserve bare-decorator guard
     """Mark the entry point: `def|async def main(input: In, ctx: Context) -> Out | None`."""
     if func is None or not callable(func):
         raise EntryPointError("@script takes no arguments; use it as a bare decorator")

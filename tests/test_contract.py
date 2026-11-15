@@ -174,7 +174,6 @@ def test_dict_return_uses_validation_names(run_script):
     assert r.code == 0 and r.envelope["result"] == {"userName": "d", "plain": 1}
 
 
-
 # Fix round 1: re-validation reads field names, never aliases, and ignores computed fields
 
 OVERLAP = """
@@ -290,13 +289,14 @@ def test_a_str_subclass_cannot_smuggle_a_reserved_code(run_script):
     assert r.code == 1 and r.envelope["error"]["code"] == "script_error"
 
 
-@pytest.mark.parametrize("models,ret", [
-    ('class In(BaseModel):\n    name: str = Field(pattern="x")\n', "None"),
-    ('class In(BaseModel):\n    pass\nclass Item(BaseModel):\n    id: str\n', "Dataset[Item]"),
-])
-def test_run_reuses_inspect_contract_before_reading_input(
-    run_script, inspect_source, models, ret
-):
+@pytest.mark.parametrize(
+    "models,ret",
+    [
+        ('class In(BaseModel):\n    name: str = Field(pattern="x")\n', "None"),
+        ("class In(BaseModel):\n    pass\nclass Item(BaseModel):\n    id: str\n", "Dataset[Item]"),
+    ],
+)
+def test_run_reuses_inspect_contract_before_reading_input(run_script, inspect_source, models, ret):
     from script_source import script_source
 
     source = script_source(models=models, ret=ret)
@@ -310,8 +310,8 @@ def test_run_reuses_inspect_contract_before_reading_input(
 def test_invalid_script_error_code_warns_once(run_script, code):
     r = run_script(script_source(f'raise ScriptError({code!r}, "mine")'))
     warnings = [line for line in r.err.splitlines() if line.startswith("warning:")]
+    escaped = code.replace("\n", "\\n")
     assert warnings == [
-        f"warning: ScriptError code '{code.replace(chr(10), r'\n')}' "
-        "is invalid or reserved; reported as script_error"
+        f"warning: ScriptError code '{escaped}' is invalid or reserved; reported as script_error"
     ]
     assert r.envelope["error"]["code"] == "script_error"
