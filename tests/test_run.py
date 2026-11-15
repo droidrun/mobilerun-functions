@@ -701,3 +701,20 @@ def test_input_failure_stderr_details_are_redacted(run_script):
     r = run_script(script_source(), {"count": "SECRET"})
     assert r.code == 2 and r.err.startswith("error input_invalid:")
     assert "count" in r.err and "int_parsing" in r.err and "SECRET" not in r.err
+
+
+def test_required_output_rejects_none(run_script):
+    r = run_script(script_source())
+    assert r.code == 1 and r.envelope["error"] == {
+        "code": "output_invalid",
+        "message": "returned None; annotate the return type as `Output | None`",
+        "retryable": False,
+    }
+
+
+def test_missing_return_annotation_warns_but_runs(inspect_source, run_script):
+    source = script_source(ret=None)
+    code, out, _ = inspect_source(source)
+    assert code == 0
+    assert json.loads(out)["warnings"][0]["code"] == "return_annotation_missing"
+    assert run_script(source).code == 0

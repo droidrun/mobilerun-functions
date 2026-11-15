@@ -510,3 +510,12 @@ def test_cancellation_wins_over_what_the_script_does_afterwards(write_script, tm
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
     assert without_input(json.loads((tmp_path / "out.json").read_text())) == CANCELLED
+
+
+@pytest.mark.parametrize("with_file", [False, True])
+def test_required_dataset_none_needs_a_pushed_item(run_script, dataset_file, with_file):
+    args = ["--dataset-file", str(dataset_file)] if with_file else []
+    empty = run_script(ds_script("pass", ret="Dataset[Item]"), extra_args=args)
+    assert empty.code == 1 and empty.envelope["error"]["code"] == "output_invalid"
+    pushed = run_script(ds_script(PUSH_TWO, ret="Dataset[Item]"), extra_args=args)
+    assert pushed.code == 0

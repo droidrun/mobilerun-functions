@@ -25,6 +25,8 @@ class EntryPoint:
     takes_ctx: bool
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None
+    allows_none: bool
+    return_annotation_missing: bool
 
     @property
     def output_kind(self) -> OutputKind:
@@ -135,6 +137,11 @@ def _build(func: Any) -> EntryPoint:
         takes_ctx=takes_ctx,
         input_model=input_model,
         output_model=output_model,
+        allows_none=(
+            output_model is None
+            or type(None) in typing.get_args(hints.get("return"))
+        ),
+        return_annotation_missing="return" not in hints,
     )
 
 

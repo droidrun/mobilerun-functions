@@ -191,7 +191,7 @@ def _read_input(path: str) -> bytes:
         raise RunnerFault(f"cannot read input file: {exc}") from exc
 
 
-def _serialise_result(entry: EntryPoint, value: Any) -> tuple[Any, dict[str, Any] | None]:
+def _serialise_result(entry: EntryPoint, value: Any, pushed: bool = False) -> tuple[Any, dict[str, Any] | None]:
     """Return `(result_json, failure)`; failure is set when the value breaks the contract."""
     model = entry.output_model
     if model is None:
@@ -202,6 +202,10 @@ def _serialise_result(entry: EntryPoint, value: Any) -> tuple[Any, dict[str, Any
             )
         return None, None
     if value is None:
+        if not entry.allows_none and not (entry.output_kind == "dataset" and pushed):
+            return None, _failure(
+                "output_invalid", "returned None; annotate the return type as `Output | None`"
+            )
         return None, None
     try:
         # Instances are validated again: they may come from model_construct or have been
@@ -243,7 +247,7 @@ def _execute(
             ), EXIT_INPUT_INVALID
         opts.echoed_input = _echo_input(model_input)
         value = _call(entry, model_input, ctx)
-        result, failure = _serialise_result(entry, value)
+        result, failure = _serialise_result(entry, value, pushed=ctx.dataset.count > 0)
         if failure is None:
             if entry.output_kind == "dataset":
                 result = ctx.dataset.finish(result)
