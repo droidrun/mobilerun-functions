@@ -27,3 +27,8 @@ def atomic_write_text(path: str | os.PathLike[str], text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def one_line(msg: object) -> str:
+    """Escape line breaks for stderr and status messages."""
+    return str(msg).replace("\r", "\\r").replace("\n", "\\n")

@@ -29,7 +29,6 @@ cat out.json
 # {"ok":true,"outcome":"succeeded","result":{"message":"Hello, Ada!"},"input":{"name":"Ada","greeting":"Hello"}}
 ```
 
-
 A script is one Python file with this shape (the starter also has a `greeting` input):
 
 ```python
@@ -82,11 +81,12 @@ from hello import Input, main
 from mobilerun_routines import Context, RunInfo, State
 
 
-def test_greeting():
+def test_greeting() -> None:
     ctx = Context(RunInfo(), state=State(previous={"count": 1}, previous_schema=1))
     output = main(Input(name="Ada"), ctx)
     assert output.message == "Hello, Ada!"
     ctx.state.save({"count": 2})
+    assert ctx.state.saved is not None
     assert ctx.state.saved.data == {"count": 2}
 ```
 
@@ -163,9 +163,8 @@ catch the error and call `ctx.partial`.
 With `--dataset-file`, items the entry point returns are appended after the pushed ones and
 `result` is `null`; every envelope carries `"dataset": {"items": N, "bytes": B}` for the lines
 this run wrote. Without it, `result` holds `{"items": [...]}` with pushed items first,
-then returned items. With no pushes and a `None` return, `result` stays `null`.
-Returning `None` for `Dataset[Item]` is allowed after at least one push; use `Dataset(items=[])`
-for an empty list, or annotate `Dataset[Item] | None` to allow no returned dataset.
+then returned items. Returning `None` for `Dataset[Item]` publishes the pushed items,
+including an empty dataset when nothing was pushed. This also applies to `Dataset[Item] | None`.
 Static checking accepts models and dictionaries for `push`; the precise `Item` shape is checked
 at runtime. For direct tests, pass `DatasetSink(item_type=Item)` from `mobilerun_routines.dataset`
 to `Context(..., dataset=...)`.
@@ -230,7 +229,6 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 ### Control the device
 
-
 A run started with a device gives the script `ctx.device()`. It is synchronous and returns the
 `mobilerun-core` device of the run, connected once and reused on every call:
 
@@ -282,7 +280,6 @@ URL or required token raises `NotAvailableError`.
 
 ## Commands reference
 
-
 ```sh
 # write a starter script (fails if the file exists; the directory must exist)
 python -m mobilerun_routines new hello.py
@@ -302,7 +299,6 @@ point) to `PATH` and prints the path. It never overwrites: if `PATH` exists, or 
 missing, it prints one line on stderr and exits 64. The starter passes `inspect` as written.
 
 ### `inspect`
-
 
 On success it prints one JSON object on stdout and exits 0:
 `{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
@@ -364,8 +360,8 @@ Pydantic model, so a `datetime` field receives a parsed value.
 ### `run`
 
 `run PATH --input-file PATH --result-file PATH` validates the same contract as `inspect`
-before reading input. Contract violations exit 3, print the same issue JSON on stdout and
-issue lines on stderr, and write no result file.
+before reading input. Contract violations exit 3, write nothing to stdout and
+print one issue line on stderr in the same format as `inspect`, and write no result file.
 
 | Flag | Meaning / default |
 | --- | --- |
@@ -386,19 +382,15 @@ Every failed run with exit 1 or 2 writes one summary line `error CODE: MESSAGE` 
 including field paths and error types for validation failures. The result file remains the
 machine-readable source of the full envelope.
 
-## Development
-
-Develop with `uv sync --frozen && uv run ruff check && uv run pytest`.
-
 ## Platform contract
-
 
 Exit codes: `0` success; `1` the run failed (error envelope); `2` invalid input; `3` no valid
 entry point (no result file); `64` runner fault such as bad flags or an unreadable file (no
 result file). The envelope is
 `{"ok": true, "outcome": "succeeded" | "partial", "result": ...}` (a partial one also has
 `partialReason`; with `ctx.state.save` it has `state`) or
-`{"ok": false, "error": {"code", "message", "retryable", "details"?}}`. Validation `error.details` lists field paths and error types
+`{"ok": false, "error": {"code", "message", "retryable", "details"?}}`.
+Validation `error.details` lists field paths and error types
 only (`{"path": "items.0.name", "message": "string_type"}`), never input values.
 
 Both envelopes also carry `"input"`: the input the entry point received, after validation and
@@ -429,10 +421,9 @@ them; this package does not.
 **Limits.**
 
 - `error.message` and `partialReason` are cut to 500 characters (`ERROR_MESSAGE_MAX_CHARS`).
-- `result`: 524288 bytes of compact JSON (`RESULT_MAX_BYTES`).
+- `result` for value outputs: 524288 bytes of compact JSON (`RESULT_MAX_BYTES`).
 - `state`: 524288 bytes (`STATE_MAX_BYTES`).
 - dataset (buffer or file): 524288 bytes (`DATASET_MAX_BYTES`).
-
 
 ### Cancellation
 
@@ -441,4 +432,9 @@ the script swallows the interruption or fails while cleaning up. It writes
 `{"ok": false, "error": {"code": "cancelled", "message": "terminated by signal", "retryable":
 false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. Lines already
 pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
-`push` is safe to call from several threads. The deadline is informational; the platform enforces it. The package has no timeout or retry logic.
+`push` is safe to call from several threads. The deadline is informational; the platform
+enforces it. The package has no timeout or retry logic.
+
+## Development
+
+Develop with `uv sync --frozen && uv run ruff check && uv run pytest`.

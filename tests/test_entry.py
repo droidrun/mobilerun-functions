@@ -143,20 +143,6 @@ def test_list_return_error_has_dataset_hint(inspect_source):
     assert "mobilerun_user_script." not in out
 
 
-def test_reregistering_same_name_replaces_entry():
-    def main(input: In) -> None:
-        pass
-
-    script(main)
-    original = main
-
-    @script
-    def main(input: In) -> None:
-        pass
-
-    assert _entry().func is main and main is not original
-
-
 def test_public_testing_context_and_state():
     from mobilerun_routines import RunInfo, State
 

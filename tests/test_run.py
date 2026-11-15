@@ -637,7 +637,7 @@ def test_an_import_time_failure_has_no_input_field(run_script):
 
 def test_a_huge_input_is_left_out_and_the_run_is_unchanged(run_script):
     big = "x" * (800 * 1024)
-    r = run_script(script_source("return Out(greeting=input.name[:3])"), {"name": big})
+    r = run_script(script_source('return Out(greeting=input.name[:3])'), {"name": big})
     assert r.code == 0 and without_input(r.envelope) == {
         "ok": True,
         "outcome": "succeeded",

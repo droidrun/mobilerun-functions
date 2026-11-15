@@ -203,7 +203,6 @@ def test_unwritable_dataset_file_is_a_runner_fault(run_script, tmp_path):
 
 # D1: size cap
 
-
 def _line_bytes(id_len: int) -> int:
     return len(json.dumps({"id": "x" * id_len, "price": 0.0}, separators=(",", ":"))) + 1
 
@@ -516,9 +515,29 @@ def test_cancellation_wins_over_what_the_script_does_afterwards(write_script, tm
 
 
 @pytest.mark.parametrize("with_file", [False, True])
-def test_required_dataset_none_needs_a_pushed_item(run_script, dataset_file, with_file):
+def test_dataset_none_accepts_zero_or_more_pushed_items(run_script, dataset_file, with_file):
     args = ["--dataset-file", str(dataset_file)] if with_file else []
     empty = run_script(ds_script("pass", ret="Dataset[Item]"), extra_args=args)
-    assert empty.code == 1 and empty.envelope["error"]["code"] == "output_invalid"
+    assert empty.code == 0
+    assert empty.envelope["result"] == (None if with_file else {"items": []})
     pushed = run_script(ds_script(PUSH_TWO, ret="Dataset[Item]"), extra_args=args)
     assert pushed.code == 0
+
+
+@pytest.mark.parametrize("pushed", [False, True])
+@pytest.mark.parametrize("extra", [0, 1])
+def test_file_and_buffer_share_exact_dataset_limit(run_script, dataset_file, pushed, extra):
+    item = 'Item(id="x" * (DATASET_MAX_BYTES - 22 + input.pad))'
+    body = f"ctx.dataset.push({item})" if pushed else f"return Dataset(items=[{item}])"
+    source = ds_script(body, ret="Dataset[Item]")
+    buffered = run_script(source, {"pad": extra})
+    filed = run_script(
+        source, {"pad": extra}, extra_args=["--dataset-file", str(dataset_file)]
+    )
+    assert buffered.code == filed.code == (0 if extra == 0 else 1)
+    if extra:
+        assert buffered.envelope["error"]["code"] == "dataset_too_large"
+        assert filed.envelope["error"]["code"] == "dataset_too_large"
+    else:
+        assert dataset_file.stat().st_size == DATASET_MAX_BYTES
+        assert buffered.envelope["result"]["items"][0]["id"] == "x" * (DATASET_MAX_BYTES - 22)

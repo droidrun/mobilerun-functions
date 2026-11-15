@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, JsonValue, StrictInt, TypeAdapter
 
-from ._io import atomic_write_text, dumps_json
+from ._io import atomic_write_text, dumps_json, one_line
 from .dataset import DatasetSink
 from .device import connect_device
 from .errors import NotAvailableError
@@ -42,15 +42,11 @@ class RunInfo:
     device_url: str | None = None
 
 
-def _one_line(msg: object) -> str:
-    return str(msg).replace("\r", "\\r").replace("\n", "\\n")
-
-
 class Log:
     """Log lines go to stderr; `status` publishes the latest status through a file."""
 
     def _write(self, level: str, msg: object) -> None:
-        sys.stderr.write(f"[{level}] {_one_line(msg)}\n")
+        sys.stderr.write(f"[{level}] {one_line(msg)}\n")
         sys.stderr.flush()
 
     def info(self, msg: object) -> None:
@@ -67,7 +63,7 @@ class Log:
         if not path:
             return
         try:
-            atomic_write_text(path, _one_line(msg) + "\n")
+            atomic_write_text(path, one_line(msg) + "\n")
         except OSError:
             pass  # status is best effort and never fails the script
 
@@ -128,7 +124,7 @@ class Context:
         run: RunInfo,
         log: Log | None = None,
         state: State | None = None,
-        dataset: DatasetSink[BaseModel] | None = None,
+        dataset: DatasetSink | None = None,
     ) -> None:
         self.run = run
         self.log = log if log is not None else Log()

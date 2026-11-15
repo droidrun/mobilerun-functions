@@ -28,9 +28,9 @@ from pydantic import (
 )
 
 from ._contract import inspect_entry
-from ._io import atomic_write_text, dumps_json
+from ._io import atomic_write_text, dumps_json, one_line
 from ._validate import revalidate, validation_details
-from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State, _one_line
+from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State
 from .dataset import DatasetFile, DatasetSink
 from .entry import EntryPoint
 from .errors import (
@@ -136,14 +136,13 @@ _UNFORMATTABLE = "error message could not be formatted"
 
 def _script_error_code(code: Any) -> str:
     """The script's code if it is well formed and not reserved, else `script_error`."""
-    if not isinstance(code, str):
-        return "script_error"
-    code = str.__str__(code)  # a plain str: a subclass could lie in `==`
-    if ERROR_CODE_PATTERN.fullmatch(code) and code not in RESERVED_ERROR_CODES:
-        return code
+    if isinstance(code, str):
+        normalised = str.__str__(code)  # a plain str: a subclass could lie in `==`
+        if ERROR_CODE_PATTERN.fullmatch(normalised) and normalised not in RESERVED_ERROR_CODES:
+            return normalised
     sys.stderr.write(
         "warning: ScriptError code '"
-        + _one_line(code)
+        + one_line(code)
         + "' is invalid or reserved; reported as script_error\n"
     )
     return "script_error"
@@ -196,9 +195,7 @@ def _read_input(path: str) -> bytes:
         raise RunnerFault(f"cannot read input file: {exc}") from exc
 
 
-def _serialise_result(
-    entry: EntryPoint, value: Any, pushed: bool = False
-) -> tuple[Any, dict[str, Any] | None]:
+def _serialise_result(entry: EntryPoint, value: Any) -> tuple[Any, dict[str, Any] | None]:
     """Return `(result_json, failure)`; failure is set when the value breaks the contract."""
     model = entry.output_model
     if model is None:
@@ -209,7 +206,7 @@ def _serialise_result(
             )
         return None, None
     if value is None:
-        if not entry.allows_none and not (entry.output_kind == "dataset" and pushed):
+        if not entry.allows_none and entry.output_kind == "value":
             return None, _failure(
                 "output_invalid", "returned None; annotate the return type as `Output | None`"
             )
@@ -254,7 +251,7 @@ def _execute(
             ), EXIT_INPUT_INVALID
         opts.echoed_input = _echo_input(model_input)
         value = _call(entry, model_input, ctx)
-        result, failure = _serialise_result(entry, value, pushed=ctx.dataset.count > 0)
+        result, failure = _serialise_result(entry, value)
         if failure is None:
             if entry.output_kind == "dataset":
                 result = ctx.dataset.finish(result)
@@ -262,7 +259,7 @@ def _execute(
         # ScriptError stays typed; anything else raised by script code or its validators and
         # serializers is a script_error.
         return _failure_from_exception(exc), EXIT_FAILED
-    if failure is None:
+    if failure is None and entry.output_kind != "dataset":
         failure = _size_failure(result, RESULT_MAX_BYTES, "result_too_large", "result")
     if failure is not None:
         return failure, EXIT_FAILED
@@ -350,11 +347,11 @@ def run(opts: RunOptions) -> int:
         if opts.echoed_input is not None:
             envelope["input"] = opts.echoed_input
         _write_envelope(opts.result_file, envelope)
-        if code in (EXIT_FAILED, EXIT_INPUT_INVALID):
+        if not envelope["ok"]:
             error = envelope["error"]
             details = error.get("details", [])
             suffix = " " + dumps_json(details) if details else ""
-            sys.stderr.write(_one_line(f"error {error['code']}: {error['message']}{suffix}") + "\n")
+            sys.stderr.write(one_line(f"error {error['code']}: {error['message']}{suffix}") + "\n")
         return code
     finally:
         cancellation.restore()

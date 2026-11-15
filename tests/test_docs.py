@@ -70,8 +70,8 @@ def test_readme_section_order():
         "Datasets",
         "Context reference",
         "Commands reference",
-        "Development",
         "Platform contract",
+        "Development",
     ]
 
 

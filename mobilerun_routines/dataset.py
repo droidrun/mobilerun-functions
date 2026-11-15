@@ -11,6 +11,7 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from ._io import dumps_json
 from ._validate import revalidate, validation_details
 from .errors import DatasetItemInvalidError, DatasetTooLargeError, NotAvailableError
 
@@ -18,7 +19,6 @@ DATASET_MAX_BYTES = 524288
 KEY_MARKER = "x-mobilerun-key"
 
 ItemT = TypeVar("ItemT")
-SinkItemT = TypeVar("SinkItemT", bound=BaseModel)
 
 
 class Dataset(BaseModel, Generic[ItemT]):
@@ -44,7 +44,9 @@ def key_field(**kwargs: Any) -> Any:
 
 
 class DatasetFile:
-    """The JSON Lines file of one run: created empty at start, only complete lines survive.
+    """The JSON Lines file or in-memory buffer of one run, created empty at start.
+
+    Only complete lines survive.
 
     One lock covers the size check, the write and the accounting, so threads cannot exceed the
     limit together or interleave lines. `finalise` cuts the file back to the last complete line.
@@ -52,7 +54,11 @@ class DatasetFile:
 
     def __init__(self, path: str | os.PathLike[str] | None) -> None:
         self.path = Path(path) if path is not None else None
-        self._fh = io.BytesIO() if self.path is None else open(self.path, "wb", buffering=0)  # noqa: SIM115 - closed in `close`
+        self._fh: io.BytesIO | io.FileIO
+        if self.path is None:
+            self._fh = io.BytesIO()
+        else:
+            self._fh = open(self.path, "wb", buffering=0)  # noqa: SIM115 - closed in `close`
         self._lock = threading.Lock()
         self._items = 0
         self._bytes = 0  # offset of the end of the last complete line
@@ -89,14 +95,15 @@ class DatasetFile:
 
     def buffered_items(self) -> list[Any]:
         with self._lock:
+            assert isinstance(self._fh, io.BytesIO)
             return [json.loads(line) for line in self._fh.getvalue().splitlines()]
 
     def close(self) -> None:
         self._fh.close()
 
 
-class DatasetSink(Generic[SinkItemT]):
-    """`ctx.dataset`: push items to the dataset file as the script finds them.
+class DatasetSink:
+    """`ctx.dataset`: push items to a file or in-memory buffer as the script finds them.
 
     `item_type` is the `Item` of the entry point's `Dataset[Item]` return annotation, or `None`
     when the entry point does not return a dataset.
@@ -107,21 +114,16 @@ class DatasetSink(Generic[SinkItemT]):
         self._adapter = None if item_type is None else TypeAdapter(item_type)
         self._item_type = item_type
 
-    @property
-    def count(self) -> int:
-        return self._file.stats()["items"]
-
-    def finish(self, result: Any) -> Any:
-        if self._file.path is None and self.count == 0:
-            return result
+    def finish(self, result: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Append returned items after pushed items; return buffered data, or None for a file."""
         if result is not None:
-            from ._io import dumps_json
-
             for item in result["items"]:
                 self._file.append(dumps_json(item))
-        return {"items": self._file.buffered_items()} if self._file.path is None else None
+        if self._file.path is None:
+            return {"items": self._file.buffered_items()}
+        return None
 
-    def push(self, item: SinkItemT | dict[str, Any]) -> None:
+    def push(self, item: BaseModel | dict[str, Any]) -> None:
         """Validate `item` against the dataset's item model and append it as one line.
 
         Raises `DatasetItemInvalidError` for an invalid item and `DatasetTooLargeError` when the

@@ -7,10 +7,11 @@ import types
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal, TypeVar, cast
+from typing import Any, Literal, TypeGuard, TypeVar
 
 from pydantic import BaseModel
 
+from ._constants import MODULE_NAME
 from .context import Context
 from .dataset import Dataset
 from .errors import EntryPointError
@@ -42,6 +43,7 @@ class EntryPoint:
         """The `Item` of a `Dataset[Item]` output; `Any` for a bare `Dataset`."""
         if self.output_kind != "dataset":
             return None
+        assert self.output_model is not None
         annotation = self.output_model.model_fields["items"].annotation
         (item,) = typing.get_args(annotation)
         return Any if isinstance(item, typing.TypeVar) else item
@@ -61,12 +63,12 @@ def reset() -> None:
     _ENTRY_POINTS.clear()
 
 
-def _is_model(tp: Any) -> bool:
+def _is_model(tp: Any) -> TypeGuard[type[BaseModel]]:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
 def _describe(tp: Any) -> str:
-    return (tp.__name__ if isinstance(tp, type) else repr(tp)).replace("mobilerun_user_script.", "")
+    return (tp.__name__ if isinstance(tp, type) else repr(tp)).replace(f"{MODULE_NAME}.", "")
 
 
 def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
@@ -80,14 +82,12 @@ def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
         if len(args) == 1:
             tp = args[0]
     if not _is_model(tp):
+        hint = (
+            "; return `Dataset[Item]` for a list of items" if typing.get_origin(tp) is list else ""
+        )
         raise EntryPointError(
             f"return: annotation must be a pydantic BaseModel subclass, "
-            f"'OutputModel | None', Dataset[Item] or None, got {_describe(tp)}"
-            + (
-                "; return `Dataset[Item]` for a list of items"
-                if typing.get_origin(tp) is list
-                else ""
-            )
+            f"'OutputModel | None', Dataset[Item] or None, got {_describe(tp)}{hint}"
         )
     return tp
 
@@ -150,13 +150,13 @@ def _build(func: Any) -> EntryPoint:
     )
 
 
-def script(func: F = cast(F, None)) -> F:  # noqa: B008 - preserve bare-decorator guard
+def script(func: F | None = None) -> F:
     """Mark the entry point: `def|async def main(input: In, ctx: Context) -> Out | None`."""
     if func is None or not callable(func):
         raise EntryPointError("@script takes no arguments; use it as a bare decorator")
     entry = _build(func)
     module = func.__module__
-    if module in _ENTRY_POINTS and _ENTRY_POINTS[module].name != entry.name:
+    if module in _ENTRY_POINTS:
         raise EntryPointError(
             f"duplicate entry point '{entry.name}': '{_ENTRY_POINTS[module].name}' is already "
             "marked with @script (one per module)"

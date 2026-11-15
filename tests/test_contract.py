@@ -174,6 +174,7 @@ def test_dict_return_uses_validation_names(run_script):
     assert r.code == 0 and r.envelope["result"] == {"userName": "d", "plain": 1}
 
 
+
 # Fix round 1: re-validation reads field names, never aliases, and ignores computed fields
 
 OVERLAP = """
@@ -281,6 +282,7 @@ def test_non_string_code_becomes_script_error(run_script):
     r = run_script(script_source('raise ScriptError(5, "mine")'))
     assert r.envelope["error"]["code"] == "script_error"
     assert r.envelope["error"]["message"] == "mine"
+    assert "warning: ScriptError code '5' is invalid or reserved" in r.err
 
 
 def test_a_str_subclass_cannot_smuggle_a_reserved_code(run_script):
@@ -290,20 +292,25 @@ def test_a_str_subclass_cannot_smuggle_a_reserved_code(run_script):
 
 
 @pytest.mark.parametrize(
-    "models,ret",
+    "models,ret,decorator",
     [
-        ('class In(BaseModel):\n    name: str = Field(pattern="x")\n', "None"),
-        ("class In(BaseModel):\n    pass\nclass Item(BaseModel):\n    id: str\n", "Dataset[Item]"),
+        ('class In(BaseModel):\n    name: str = Field(pattern="x")\n', "None", "@script"),
+        (
+            "class In(BaseModel):\n    pass\nclass Item(BaseModel):\n    id: str\n",
+            "Dataset[Item]",
+            "@script",
+        ),
+        ("class In(BaseModel):\n    pass\n", "None", ""),
     ],
 )
-def test_run_reuses_inspect_contract_before_reading_input(run_script, inspect_source, models, ret):
-    from script_source import script_source
-
-    source = script_source(models=models, ret=ret)
-    inspected = inspect_source(source)
+def test_run_reuses_inspect_contract_before_reading_input(
+    run_script, inspect_source, models, ret, decorator
+):
+    source = script_source(models=models, ret=ret, decorator=decorator)
+    code, out, err = inspect_source(source)
     ran = run_script(source, raw_input="not json")
-    assert inspected[0] == ran.code == 3 and ran.envelope is None
-    assert ran.out == inspected[1] and ran.err == inspected[2]
+    assert code == ran.code == 3 and ran.envelope is None
+    assert json.loads(out)["ok"] is False and ran.out == "" and ran.err == err
 
 
 @pytest.mark.parametrize("code", ["Bad", "cancelled", "two\nlines"])
