@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from .errors import NotAvailableError
 
@@ -62,9 +62,8 @@ def _connect_local(device_id: str | None, platform: str | None, url: str | None)
         # An explicit backend means a local run can never reach the cloud. No bearer: local
         # devices need none, and Portal tokens come from core's own environment variables.
         client = core.Mobilerun()
-        return cast(
-            "Device", client.connect(device_id, backend=_local_backend(platform, url), url=url)
-        )
+        device: Device = client.connect(device_id, backend=_local_backend(platform, url), url=url)
+        return device
     except ValueError as exc:
         raise _missing(f"is not available: {' '.join(str(exc).split())}") from None
 
@@ -86,4 +85,5 @@ def _connect_cloud(device_id: str | None) -> Device:
     if absent:
         raise _missing(f"is not available: {' and '.join(absent)} not set")
     client = core.Mobilerun(bearer=api_key, base_url=base_url)
-    return cast("Device", client.connect(device_id, cloud=True))
+    device: Device = client.connect(device_id, cloud=True)
+    return device

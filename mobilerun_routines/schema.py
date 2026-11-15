@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel
 from pydantic.errors import PydanticInvalidForJsonSchema, PydanticUserError
@@ -58,7 +58,7 @@ def _walk(node: Any, defs: dict[str, Any], stack: tuple[str, ...], path: str) ->
             raise SchemaError(f"{_where(path)}: keyword '{key}' is not supported")
         if key == "format" and value not in ALLOWED_FORMATS:
             raise SchemaError(f"{_where(path)}: format '{value}' is not supported")
-        if key in ("title", "$defs"):
+        if key in ("title", "$defs", "definitions"):
             continue
         if key in _SCHEMA_MAPS and isinstance(value, dict):
             out[key] = {
@@ -81,7 +81,8 @@ def model_schema(model: type[BaseModel], mode: JsonSchemaMode) -> dict[str, Any]
     except (PydanticInvalidForJsonSchema, PydanticUserError) as exc:
         raise SchemaError(f"cannot build JSON Schema: {str(exc).splitlines()[0]}") from exc
     defs = raw.get("$defs", {})
-    return cast(dict[str, Any], _walk(raw, defs, (), ""))
+    schema: dict[str, Any] = _walk(raw, defs, (), "")
+    return schema
 
 
 def dataset_key(schema: dict[str, Any]) -> str:
