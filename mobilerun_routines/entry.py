@@ -156,7 +156,7 @@ def script(func: F = cast(F, None)) -> F:  # noqa: B008 - preserve bare-decorato
         raise EntryPointError("@script takes no arguments; use it as a bare decorator")
     entry = _build(func)
     module = func.__module__
-    if module in _ENTRY_POINTS:
+    if module in _ENTRY_POINTS and _ENTRY_POINTS[module].name != entry.name:
         raise EntryPointError(
             f"duplicate entry point '{entry.name}': '{_ENTRY_POINTS[module].name}' is already "
             "marked with @script (one per module)"

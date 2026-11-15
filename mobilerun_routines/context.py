@@ -32,11 +32,11 @@ _STRICT_INT = TypeAdapter(StrictInt)
 
 @dataclass(frozen=True)
 class RunInfo:
-    run_id: str
-    attempt: int
-    deadline: datetime | None
-    mode: RunMode
-    device_id: str | None
+    run_id: str = "local"
+    attempt: int = 1
+    deadline: datetime | None = None
+    mode: RunMode = "live"
+    device_id: str | None = None
     device_target: DeviceTarget = "cloud"
     device_platform: DevicePlatform | None = None
     device_url: str | None = None
@@ -85,7 +85,7 @@ class State:
 
     def __init__(
         self,
-        configured: bool = False,
+        configured: bool = True,
         previous: JsonValue = None,
         previous_schema: int | None = None,
     ) -> None:

@@ -141,3 +141,28 @@ def test_list_return_error_has_dataset_hint(inspect_source):
     """)
     assert code == 3 and "return `Dataset[Item]`" in out
     assert "mobilerun_user_script." not in out
+
+
+def test_reregistering_same_name_replaces_entry():
+    def main(input: In) -> None:
+        pass
+
+    script(main)
+    original = main
+
+    @script
+    def main(input: In) -> None:
+        pass
+
+    assert _entry().func is main and main is not original
+
+
+def test_public_testing_context_and_state():
+    from mobilerun_routines import RunInfo, State
+
+    ctx = Context(RunInfo(), state=State(previous={"n": 1}, previous_schema=2))
+    assert ctx.run.run_id == "local" and ctx.run.attempt == 1
+    assert ctx.run.mode == "live" and ctx.run.deadline is None and ctx.run.device_id is None
+    ctx.state.save({"n": 2})
+    assert ctx.state.previous == {"n": 1} and ctx.state.previous_schema == 2
+    assert ctx.state.saved.data == {"n": 2}
