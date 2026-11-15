@@ -14,7 +14,7 @@ which needs `by_name` validation from pydantic 2.11).
 pip install mobilerun-routines
 ```
 
-Python 3.11, 3.12 or 3.13. For device control add the extra: `pip install "mobilerun-routines[device]"`.
+For device control add the extra: `pip install "mobilerun-routines[device]"`.
 
 ## Hello
 
@@ -227,6 +227,9 @@ partial result, and use `ctx.state` to carry data to the next run.
 | `run.mode` | `live` (default), `dry_run`, or `verification`; the script decides how to handle it. |
 | `run.deadline` | Optional datetime, informational; the platform enforces the deadline. |
 | `run.device_id` | Optional device identifier. |
+| `run.device_target` | `cloud` (default) or `local`. |
+| `run.device_platform` | Optional local device platform: `android` or `ios`. |
+| `run.device_url` | Optional local Portal HTTP URL. |
 | `log.info` / `log.warning` / `log.error` | One line on stderr per call. |
 | `log.status` | Replaces the file named by `MOBILERUN_ROUTINES_STATUS_FILE`; no-op if unset, best effort. |
 | `state.previous` / `state.previous_schema` | Prior saved JSON data and its schema number, or `None`. |
@@ -358,8 +361,8 @@ correct import and a one-line example. `error` is always the first entry of `err
 that only read `error.code` and `error.message` keep working. stderr gets one line per error:
 `line N: message — hint`.
 
-The schemas are limited to a subset the platform can validate. `pattern`, `prefixItems`,
-`discriminator` and recursive models are rejected, and so is any `format` outside this list:
+The schemas are limited to a subset the platform can validate. `pattern`, `patternProperties`,
+`prefixItems`, `discriminator` and recursive models are rejected, and so is any `format` outside this list:
 
 `date-time`, `date`, `uuid`, `uri`, `email`
 
@@ -371,7 +374,11 @@ Pydantic model, so a `datetime` field receives a parsed value.
 
 `run PATH --input-file PATH --result-file PATH` validates the same contract as `inspect`
 before reading input. Contract violations exit 3, write nothing to stdout and
-print one issue line on stderr in the same format as `inspect`, and write no result file.
+print one line per issue on stderr in the same format as `inspect`, and write no result file.
+
+An exception raised while importing the script instead makes `run` write an error envelope
+and exit 1 (`script_error` for an unexpected exception). `inspect` reports the same unexpected
+exception as `import_failed` and exits 3.
 
 | Flag | Meaning / default |
 | --- | --- |
