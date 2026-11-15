@@ -304,3 +304,14 @@ def test_run_reuses_inspect_contract_before_reading_input(
     ran = run_script(source, raw_input="not json")
     assert inspected[0] == ran.code == 3 and ran.envelope is None
     assert ran.out == inspected[1] and ran.err == inspected[2]
+
+
+@pytest.mark.parametrize("code", ["Bad", "cancelled", "two\nlines"])
+def test_invalid_script_error_code_warns_once(run_script, code):
+    r = run_script(script_source(f'raise ScriptError({code!r}, "mine")'))
+    warnings = [line for line in r.err.splitlines() if line.startswith("warning:")]
+    assert warnings == [
+        f"warning: ScriptError code '{code.replace(chr(10), r'\n')}' "
+        "is invalid or reserved; reported as script_error"
+    ]
+    assert r.envelope["error"]["code"] == "script_error"

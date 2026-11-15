@@ -141,6 +141,10 @@ def _script_error_code(code: Any) -> str:
     code = str.__str__(code)  # a plain str: a subclass could lie in `==`
     if ERROR_CODE_PATTERN.fullmatch(code) and code not in RESERVED_ERROR_CODES:
         return code
+    sys.stderr.write(
+        "warning: ScriptError code '" + _one_line(code)
+        + "' is invalid or reserved; reported as script_error\n"
+    )
     return "script_error"
 
 
