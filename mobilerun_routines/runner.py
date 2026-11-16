@@ -13,7 +13,7 @@ import json
 import signal
 import sys
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +30,7 @@ from pydantic import (
 from ._contract import inspect_entry
 from ._io import atomic_write_text, dumps_json, one_line
 from ._validate import revalidate, validation_details
-from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State
+from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State, StateSnapshot
 from .dataset import DatasetFile, DatasetSink
 from .entry import EntryPoint
 from .errors import (
@@ -50,6 +50,9 @@ EXIT_NO_ENTRY_POINT = 3
 EXIT_RUNNER_FAULT = 64
 
 CANCELLED_MESSAGE = "terminated by signal"
+
+# `input` is left out above this size (compact JSON), so it never crowds out the result.
+INPUT_ECHO_MAX_BYTES = 65536
 
 
 class RunnerFault(Exception):
@@ -100,9 +103,6 @@ class RunOptions:
     run_info: RunInfo
     state_file: str | None = None
     dataset_file: str | None = None
-    # Set once the input validated, before the script runs (a script may change its input
-    # model): the `input` of the envelope. `None` when absent, too big or not valid JSON.
-    echoed_input: dict[str, Any] | None = field(default=None, init=False, repr=False)
 
 
 class _StateMeta(BaseModel):
@@ -117,18 +117,23 @@ class _StateFile(BaseModel):
 
 
 _STATE_FILE = TypeAdapter(_StateFile | None)
+_UNSET = object()
 
 
-def _failure(code: str, message: str, retryable: bool = False, **extra: Any) -> dict[str, Any]:
-    return {
-        "ok": False,
-        "error": {
-            "code": code,
-            "message": str.__str__(message)[:ERROR_MESSAGE_MAX_CHARS],
-            "retryable": retryable,
-            **extra,
-        },
+def _failure(
+    code: str,
+    message: str,
+    retryable: bool = False,
+    details: Any = _UNSET,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {
+        "code": code,
+        "message": str.__str__(message)[:ERROR_MESSAGE_MAX_CHARS],
+        "retryable": retryable,
     }
+    if details is not _UNSET:
+        error["details"] = details
+    return {"ok": False, "error": error}
 
 
 _UNFORMATTABLE = "error message could not be formatted"
@@ -235,7 +240,7 @@ def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
 
 
 def _execute(
-    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None
+    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any]
 ) -> tuple[dict[str, Any], int]:
     state = _read_state(opts.state_file)
     raw_input = _read_input(opts.input_file)
@@ -249,37 +254,43 @@ def _execute(
                 f"input does not match the input schema ({exc.error_count()} error(s))",
                 details=validation_details(exc, entry.input_model),
             ), EXIT_INPUT_INVALID
-        opts.echoed_input = _echo_input(model_input)
+        # Capture before script code can change the model; keep it even after cancellation.
+        echoed_input = _echo_input(model_input)
+        if echoed_input is not None:
+            input_echo["input"] = echoed_input
         value = _call(entry, model_input, ctx)
         result, failure = _serialise_result(entry, value)
-        if failure is None:
-            if entry.output_kind == "dataset":
-                result = ctx.dataset.finish(result)
+        if failure is not None:
+            return failure, EXIT_FAILED
+        if entry.output_kind == "dataset":
+            result = ctx.dataset.finish(result)
     except (Exception, SystemExit) as exc:
         # ScriptError stays typed; anything else raised by script code or its validators and
         # serializers is a script_error.
         return _failure_from_exception(exc), EXIT_FAILED
-    if failure is None and entry.output_kind != "dataset":
+    if entry.output_kind != "dataset":
         failure = _size_failure(result, RESULT_MAX_BYTES, "result_too_large", "result")
-    if failure is not None:
-        return failure, EXIT_FAILED
-
-    envelope: dict[str, Any] = {"ok": True, "outcome": "succeeded"}
-    if ctx.partial_reason is not None:
-        envelope["outcome"] = "partial"
-        envelope["partialReason"] = ctx.partial_reason[:ERROR_MESSAGE_MAX_CHARS]
-    envelope["result"] = result
+        if failure is not None:
+            return failure, EXIT_FAILED
     saved = state.saved
     if saved is not None:
         failure = _size_failure(saved.data, STATE_MAX_BYTES, "state_too_large", "state")
         if failure is not None:
             return failure, EXIT_FAILED
+    return _success_envelope(result, ctx.partial_reason, saved), EXIT_OK
+
+
+def _success_envelope(
+    result: Any, partial_reason: str | None, saved: StateSnapshot | None
+) -> dict[str, Any]:
+    envelope: dict[str, Any] = {"ok": True, "outcome": "succeeded"}
+    if partial_reason is not None:
+        envelope["outcome"] = "partial"
+        envelope["partialReason"] = partial_reason[:ERROR_MESSAGE_MAX_CHARS]
+    envelope["result"] = result
+    if saved is not None:
         envelope["state"] = {"meta": {"schema": saved.schema}, "data": saved.data}
-    return envelope, EXIT_OK
-
-
-# `input` is left out above this size (compact JSON), so it never crowds out the result.
-INPUT_ECHO_MAX_BYTES = 65536
+    return envelope
 
 
 def _echo_input(model_input: BaseModel) -> dict[str, Any] | None:
@@ -312,7 +323,9 @@ def _open_dataset_file(path: str | None) -> DatasetFile | None:
         raise RunnerFault(f"cannot write dataset file: {exc}") from exc
 
 
-def _run_script(opts: RunOptions, dataset: DatasetFile | None) -> tuple[dict[str, Any], int]:
+def _run_script(
+    opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any]
+) -> tuple[dict[str, Any], int]:
     try:
         entry = load_script(opts.path)
     except OSError as exc:
@@ -320,7 +333,7 @@ def _run_script(opts: RunOptions, dataset: DatasetFile | None) -> tuple[dict[str
     except ScriptImportError as exc:
         return _failure_from_exception(exc.original), EXIT_FAILED
     inspect_entry(entry)
-    return _execute(entry, opts, dataset)
+    return _execute(entry, opts, dataset, input_echo)
 
 
 def run(opts: RunOptions) -> int:
@@ -332,10 +345,11 @@ def run(opts: RunOptions) -> int:
     cancellation = _Cancellation()
     cancellation.install()
     dataset = None
+    input_echo: dict[str, Any] = {}
     try:
         dataset = _open_dataset_file(opts.dataset_file)
         try:
-            envelope, code = _run_script(opts, dataset)
+            envelope, code = _run_script(opts, dataset, input_echo)
             cancellation.disarm()
         except _Cancelled:
             pass
@@ -344,8 +358,8 @@ def run(opts: RunOptions) -> int:
         if dataset is not None:
             dataset.finalise()
             envelope["dataset"] = dataset.stats()
-        if opts.echoed_input is not None:
-            envelope["input"] = opts.echoed_input
+        if "input" in input_echo:
+            envelope["input"] = input_echo["input"]
         _write_envelope(opts.result_file, envelope)
         if not envelope["ok"]:
             error = envelope["error"]
