@@ -14,7 +14,6 @@ from mobilerun_routines import (
     cli,
 )
 from mobilerun_routines._io import atomic_write_text
-from mobilerun_routines._version import SDK_VERSION
 
 
 def test_success(run_script):
@@ -603,9 +602,10 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
     assert not (tmp_path / "__pycache__").exists()
 
 
-def test_sdk_version_matches_pyproject():
+def test_pyproject_uses_dynamic_sdk_version():
     data = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
-    assert data["project"]["version"] == SDK_VERSION
+    assert "version" in data["project"]["dynamic"]
+    assert data["tool"]["hatch"]["version"]["path"] == "mobilerun_routines/_version.py"
 
 
 # the envelope reports the input the entry point received

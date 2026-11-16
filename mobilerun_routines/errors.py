@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from ._constants import ERROR_MESSAGE_MAX_CHARS as ERROR_MESSAGE_MAX_CHARS
+
 # Codes the runner itself produces. A `ScriptError` cannot use them: the platform tells runner
 # failures from script failures by code, and by exit code for `input_invalid`.
 RESERVED_ERROR_CODES = (
@@ -17,8 +19,6 @@ RESERVED_ERROR_CODES = (
     "cancelled",
 )
 ERROR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
-# Cap for `error.message` of every failure and for the reason of a partial result.
-ERROR_MESSAGE_MAX_CHARS = 500
 
 
 class ScriptError(Exception):
@@ -35,15 +35,15 @@ class ScriptError(Exception):
         self.retryable = retryable
 
 
-NO_ENTRY_POINT_MESSAGE = "no entry point: mark one function with @script"
-
-
 class EntryPointError(Exception):
     """The script has no usable entry point (missing, duplicate or wrong signature)."""
 
 
 class NoEntryPointError(EntryPointError):
     """The script defines no function marked with `@script`."""
+
+    def __init__(self, message: str = "no entry point: mark one function with @script") -> None:
+        super().__init__(message)
 
 
 class NotAvailableError(Exception):

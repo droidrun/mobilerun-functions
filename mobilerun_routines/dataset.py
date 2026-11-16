@@ -11,11 +11,11 @@ from typing import Any, Generic, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
+from ._constants import DATASET_MAX_BYTES as DATASET_MAX_BYTES
 from ._io import dumps_json
 from ._validate import revalidate, validation_details
 from .errors import DatasetItemInvalidError, DatasetTooLargeError, NotAvailableError
 
-DATASET_MAX_BYTES = 524288
 KEY_MARKER = "x-mobilerun-key"
 
 ItemT = TypeVar("ItemT")
@@ -111,7 +111,9 @@ class DatasetSink:
 
     def __init__(self, file: DatasetFile | None = None, item_type: Any = None) -> None:
         self._file = file if file is not None else DatasetFile(None)
-        self._adapter = None if item_type is None else TypeAdapter(item_type)
+        self._adapter: TypeAdapter[Any] | None = (
+            None if item_type is None else TypeAdapter(item_type)
+        )
         self._item_type = item_type
 
     def finish(self, result: dict[str, Any] | None) -> dict[str, Any] | None:

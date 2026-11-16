@@ -27,6 +27,7 @@ from pydantic import (
     ValidationError,
 )
 
+from ._constants import INPUT_ECHO_MAX_BYTES as INPUT_ECHO_MAX_BYTES
 from ._contract import inspect_entry
 from ._io import atomic_write_text, dumps_json, one_line
 from ._validate import revalidate, validation_details
@@ -50,10 +51,6 @@ EXIT_NO_ENTRY_POINT = 3
 EXIT_RUNNER_FAULT = 64
 
 CANCELLED_MESSAGE = "terminated by signal"
-
-# `input` is left out above this size (compact JSON), so it never crowds out the result.
-INPUT_ECHO_MAX_BYTES = 65536
-
 
 class RunnerFault(Exception):
     """The runner itself was misused (unreadable state file, ...)."""
@@ -116,7 +113,7 @@ class _StateFile(BaseModel):
     data: Any
 
 
-_STATE_FILE = TypeAdapter(_StateFile | None)
+_STATE_FILE: TypeAdapter[_StateFile | None] = TypeAdapter(_StateFile | None)
 _UNSET = object()
 
 

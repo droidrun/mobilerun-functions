@@ -20,5 +20,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen
+      - run: uvx --from mypy==1.11.2 mypy --strict --python-executable .venv/bin/python mobilerun_routines
       - run: uv run ruff check
       - run: uv run pytest
