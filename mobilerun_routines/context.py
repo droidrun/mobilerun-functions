@@ -107,7 +107,9 @@ class State:
                 "state.save", "is not available in this run: pass --state-file PATH to run"
             )
         schema = _STRICT_INT.validate_python(schema)
-        payload = data.model_dump_json() if isinstance(data, BaseModel) else dumps_json(data)
+        payload = (
+            data.model_dump_json(by_alias=True) if isinstance(data, BaseModel) else dumps_json(data)
+        )
         # Copy now so later changes to `data` do not alter the snapshot.
         self._saved = StateSnapshot(schema=schema, data=json.loads(payload))
 

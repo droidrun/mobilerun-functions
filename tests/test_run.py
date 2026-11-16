@@ -473,6 +473,30 @@ def test_state_previous_snapshot(run_script):
     assert "state" not in r.envelope  # nothing saved, nothing returned
 
 
+def test_state_model_alias_round_trip(run_script):
+    source = script_source(
+        '''
+        previous = Saved.model_validate(ctx.state.previous or {})
+        ctx.log.info(f"prev={previous.last_seen}")
+        ctx.state.save(Saved(lastSeen=previous.last_seen + 1))
+        ''',
+        ret="None",
+        models='''
+        class In(BaseModel):
+            pass
+
+        class Saved(BaseModel):
+            last_seen: int = Field(0, alias="lastSeen")
+        ''',
+    )
+    first = run_script(source, state=None)
+    assert first.code == 0
+    second = run_script(source, state=first.envelope["state"])
+    assert second.code == 0
+    assert second.err.splitlines() == ["[INFO] prev=1"]
+    assert first.envelope["state"] == {"meta": {"schema": 1}, "data": {"lastSeen": 1}}
+
+
 def test_state_save_default_schema_and_last_call_wins(run_script):
     r = run_script(STATE_SCRIPT, {"name": "save_default"}, state=None)
     assert r.envelope["state"] == {"meta": {"schema": 1}, "data": {"n": 1}}
