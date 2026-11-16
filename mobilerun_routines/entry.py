@@ -23,7 +23,7 @@ OutputKind = Literal["value", "dataset", "none"]
 
 @dataclass(frozen=True)
 class EntryPoint:
-    func: Any
+    func: Callable[..., Any]
     name: str
     is_async: bool
     takes_ctx: bool
@@ -58,11 +58,6 @@ def take(module: str) -> EntryPoint | None:
     return _ENTRY_POINTS.pop(module, None)
 
 
-def reset() -> None:
-    """Forget every registered entry point."""
-    _ENTRY_POINTS.clear()
-
-
 def _is_model(tp: Any) -> TypeGuard[type[BaseModel]]:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
@@ -74,7 +69,7 @@ def _describe(tp: Any) -> str:
 def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
     if "return" not in hints:
         return None
-    tp = hints["return"]
+    tp: object = hints["return"]
     if tp is type(None):
         return None
     if typing.get_origin(tp) in (typing.Union, types.UnionType):
