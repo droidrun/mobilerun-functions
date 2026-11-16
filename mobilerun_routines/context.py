@@ -7,10 +7,12 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 from pydantic import BaseModel, JsonValue, StrictInt, TypeAdapter
 
+from ._constants import RESULT_MAX_BYTES as RESULT_MAX_BYTES
+from ._constants import STATE_MAX_BYTES as STATE_MAX_BYTES
 from ._io import atomic_write_text, dumps_json, one_line
 from .dataset import DatasetSink
 from .device import connect_device
@@ -19,15 +21,13 @@ from .errors import NotAvailableError
 if TYPE_CHECKING:
     from mobilerun_core import Device
 
-RESULT_MAX_BYTES = 524288
-STATE_MAX_BYTES = 524288
 STATUS_FILE_ENV = "MOBILERUN_ROUTINES_STATUS_FILE"
 
 
 RunMode = Literal["live", "dry_run", "verification"]
 DeviceTarget = Literal["local", "cloud"]
 DevicePlatform = Literal["android", "ios"]
-_STRICT_INT = TypeAdapter(StrictInt)
+_STRICT_INT: TypeAdapter[int] = TypeAdapter(StrictInt)
 
 
 @dataclass(frozen=True)
@@ -133,7 +133,7 @@ class Context:
         self.state = state if state is not None else State()
         self.dataset = dataset if dataset is not None else DatasetSink()
         self._partial_reason: str | None = None
-        self._device: Any = None
+        self._device: Device | None = None
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
@@ -157,13 +157,13 @@ class Context:
         return self._device
 
     @property
-    def credentials(self) -> Any:
+    def credentials(self) -> NoReturn:
         raise NotAvailableError("credentials")
 
     @property
-    def files(self) -> Any:
+    def files(self) -> NoReturn:
         raise NotAvailableError("files")
 
     @property
-    def llm(self) -> Any:
+    def llm(self) -> NoReturn:
         raise NotAvailableError("llm")

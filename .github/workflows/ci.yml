@@ -20,5 +20,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen
+      - name: No package younger than 7 days
+        run: echo "UV_EXCLUDE_NEWER=$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+      - run: uvx --from mypy==1.11.2 mypy --python-executable .venv/bin/python
       - run: uv run ruff check
       - run: uv run pytest

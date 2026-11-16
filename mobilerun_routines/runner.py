@@ -27,15 +27,20 @@ from pydantic import (
     ValidationError,
 )
 
+from ._constants import (
+    ERROR_MESSAGE_MAX_CHARS,
+    INPUT_ECHO_MAX_BYTES,
+    RESULT_MAX_BYTES,
+    STATE_MAX_BYTES,
+)
 from ._contract import inspect_entry
 from ._io import atomic_write_text, dumps_json, one_line
 from ._validate import revalidate, validation_details
-from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, RunInfo, State, StateSnapshot
+from .context import Context, RunInfo, State, StateSnapshot
 from .dataset import DatasetFile, DatasetSink
 from .entry import EntryPoint
 from .errors import (
     ERROR_CODE_PATTERN,
-    ERROR_MESSAGE_MAX_CHARS,
     RESERVED_ERROR_CODES,
     DatasetItemInvalidError,
     DatasetTooLargeError,
@@ -50,9 +55,6 @@ EXIT_NO_ENTRY_POINT = 3
 EXIT_RUNNER_FAULT = 64
 
 CANCELLED_MESSAGE = "terminated by signal"
-
-# `input` is left out above this size (compact JSON), so it never crowds out the result.
-INPUT_ECHO_MAX_BYTES = 65536
 
 
 class RunnerFault(Exception):
@@ -116,7 +118,7 @@ class _StateFile(BaseModel):
     data: Any
 
 
-_STATE_FILE = TypeAdapter(_StateFile | None)
+_STATE_FILE: TypeAdapter[_StateFile | None] = TypeAdapter(_StateFile | None)
 _UNSET = object()
 
 

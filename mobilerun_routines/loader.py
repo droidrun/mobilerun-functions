@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ._constants import MODULE_NAME
 from .entry import EntryPoint, take
-from .errors import NO_ENTRY_POINT_MESSAGE, EntryPointError, NoEntryPointError
+from .errors import EntryPointError, NoEntryPointError
 
 
 class ScriptImportError(Exception):
@@ -48,5 +48,5 @@ def load_script(path: str | Path) -> EntryPoint:
         raise ScriptImportError(exc) from exc
     entry = take(MODULE_NAME)
     if entry is None:
-        raise NoEntryPointError(NO_ENTRY_POINT_MESSAGE)
+        raise NoEntryPointError()
     return entry

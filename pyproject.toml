@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mobilerun-routines"
-version = "0.6.0"
+dynamic = ["version"]
 description = "Script interface for Mobilerun routine scripts: typed entry point, Context, inspect and run."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -16,6 +16,10 @@ local = ["mobilerun-core[local]>=1.12.0,<2"]
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
+
+[tool.hatch.version]
+path = "mobilerun_routines/_version.py"
+pattern = 'SDK_VERSION = "(?P<version>[^"]+)"'
 
 [tool.hatch.build.targets.wheel]
 packages = ["mobilerun_routines"]
@@ -29,6 +33,13 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.uv]
+cache-keys = [{ file = "pyproject.toml" }, { file = "mobilerun_routines/_version.py" }]
+
+[tool.mypy]
+strict = true
+files = ["mobilerun_routines"]
 
 [[tool.mypy.overrides]]
 module = "mobilerun_core"
