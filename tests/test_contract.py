@@ -1,4 +1,4 @@
-"""Contract fixes B1-B3: error codes and messages, state schema, aliases."""
+"""Error codes and messages, previous state schema, and output aliases."""
 
 import json
 
@@ -7,7 +7,7 @@ from script_source import script_source, without_input
 
 from mobilerun_routines import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
 
-# B1: ScriptError code and message are checked
+# ScriptError codes and messages are validated
 
 
 @pytest.mark.parametrize("code", sorted(RESERVED_ERROR_CODES))
@@ -52,7 +52,7 @@ def test_script_error_raised_at_import_is_checked_too(run_script):
     assert r.code == 1 and r.envelope["error"]["code"] == "script_error"
 
 
-# B2: the schema of the previous state reaches the script
+# Previous state schema reaches the script
 
 
 def _schema_script(extra: str = ""):
@@ -74,7 +74,7 @@ def test_previous_schema_is_none_without_a_previous_state(run_script):
         assert r.code == 0 and "schema=None" in r.err
 
 
-# B3: aliases
+# Output aliases match the inspected schema
 
 ALIAS_KINDS = {
     "alias": 'user_name: str = Field(alias="userName")',
@@ -176,7 +176,7 @@ def test_dict_return_uses_validation_names(run_script):
 
 
 
-# Fix round 1: re-validation reads field names, never aliases, and ignores computed fields
+# Re-validation reads field names and ignores computed fields
 
 OVERLAP = """
 class In(BaseModel):
@@ -240,7 +240,7 @@ def test_computed_fields_do_not_hide_a_bad_instance(run_script):
     assert r.code == 1 and r.envelope["error"]["code"] == "output_invalid"
 
 
-# Fix round 1: an envelope is always written
+# Error formatting failures still produce an envelope
 
 
 SNEAKY = """
