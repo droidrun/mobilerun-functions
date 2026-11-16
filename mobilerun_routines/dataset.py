@@ -111,9 +111,9 @@ class DatasetSink:
 
     def __init__(self, file: DatasetFile | None = None, item_type: Any = None) -> None:
         self._file = file if file is not None else DatasetFile(None)
-        self._adapter: TypeAdapter[Any] | None = (
-            None if item_type is None else TypeAdapter(item_type)
-        )
+        self._adapter: TypeAdapter[Any] | None = None
+        if item_type is not None:
+            self._adapter = TypeAdapter(item_type)
         self._item_type = item_type
 
     def finish(self, result: dict[str, Any] | None) -> dict[str, Any] | None:

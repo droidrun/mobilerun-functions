@@ -7,7 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from ._constants import MAX_ERROR_DETAILS as MAX_ERROR_DETAILS
+from ._constants import MAX_ERROR_DETAILS
 
 
 def _field_data(value: Any) -> Any:

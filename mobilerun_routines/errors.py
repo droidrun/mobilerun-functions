@@ -42,8 +42,8 @@ class EntryPointError(Exception):
 class NoEntryPointError(EntryPointError):
     """The script defines no function marked with `@script`."""
 
-    def __init__(self, message: str = "no entry point: mark one function with @script") -> None:
-        super().__init__(message)
+    def __init__(self) -> None:
+        super().__init__("no entry point: mark one function with @script")
 
 
 class NotAvailableError(Exception):
