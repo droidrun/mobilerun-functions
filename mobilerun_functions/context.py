@@ -21,7 +21,7 @@ from .errors import NotAvailableError
 if TYPE_CHECKING:
     from mobilerun_core import Device
 
-STATUS_FILE_ENV = "MOBILERUN_ROUTINES_STATUS_FILE"
+STATUS_FILE_ENV = "MOBILERUN_FUNCTIONS_STATUS_FILE"
 
 
 RunMode = Literal["live", "dry_run", "verification"]

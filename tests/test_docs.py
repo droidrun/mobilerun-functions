@@ -4,10 +4,10 @@ import json
 import re
 from pathlib import Path
 
-from mobilerun_routines import (
+from mobilerun_functions import (
     RESERVED_ERROR_CODES,
 )
-from mobilerun_routines._check import INSPECT_ERROR_CODES
+from mobilerun_functions._check import INSPECT_ERROR_CODES
 
 ROOT = Path(__file__).parent.parent
 README = (ROOT / "README.md").read_text()
@@ -29,7 +29,7 @@ def test_readme_lists_exactly_the_inspect_codes():
 
 
 def test_the_script_format_example_is_a_valid_script(tmp_path, capsys):
-    from mobilerun_routines import cli
+    from mobilerun_functions import cli
 
     section = README.split("## Hello")[1].split("## Test a script")[0]
     example = re.search(r"```python\n(.*?)```", section, re.S)
@@ -42,7 +42,7 @@ def test_the_script_format_example_is_a_valid_script(tmp_path, capsys):
 
 
 def test_the_readme_sample_is_a_valid_script(tmp_path, capsys):
-    from mobilerun_routines import cli
+    from mobilerun_functions import cli
 
     section = README.split("### Dataset example")[1].split("## Context reference")[0]
     sample = re.search(r"```python\n(.*?)```", section, re.S)

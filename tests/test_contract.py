@@ -5,7 +5,7 @@ import json
 import pytest
 from script_source import script_source, without_input
 
-from mobilerun_routines import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
+from mobilerun_functions import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
 
 # ScriptError codes and messages are validated
 

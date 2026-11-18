@@ -11,10 +11,10 @@ import pytest
 from pydantic import ValidationError
 from script_source import script_source, without_input
 
-from mobilerun_routines import DATASET_MAX_BYTES, Dataset
+from mobilerun_functions import DATASET_MAX_BYTES, Dataset
 
 MODELS = """
-from mobilerun_routines import DATASET_MAX_BYTES, DatasetTooLargeError, key_field
+from mobilerun_functions import DATASET_MAX_BYTES, DatasetTooLargeError, key_field
 
 class In(BaseModel):
     n: int = 2
@@ -127,7 +127,7 @@ def test_buffer_rejects_invalid_items_without_leaking_values(run_script):
 
 
 def test_buffer_limit_counts_multibyte_utf8(run_script, monkeypatch):
-    monkeypatch.setattr("mobilerun_routines.dataset.DATASET_MAX_BYTES", _line_bytes(1))
+    monkeypatch.setattr("mobilerun_functions.dataset.DATASET_MAX_BYTES", _line_bytes(1))
     r = run_script(ds_script('ctx.dataset.push(Item(id="é"))'))
     assert r.code == 1 and r.envelope["error"]["code"] == "dataset_too_large"
 
@@ -280,7 +280,7 @@ def _spawn(script: Path, tmp_path: Path, *, dataset: bool) -> tuple[subprocess.P
     ready, result = tmp_path / "ready", tmp_path / "out.json"
     (tmp_path / "in.json").write_text(json.dumps({"ready": str(ready)}))
     argv = [
-        sys.executable, "-m", "mobilerun_routines", "run", str(script),
+        sys.executable, "-m", "mobilerun_functions", "run", str(script),
         "--input-file", str(tmp_path / "in.json"), "--result-file", str(result),
     ]  # fmt: skip
     dataset_path = tmp_path / "dataset.jsonl"
@@ -362,7 +362,7 @@ def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
 # Pushed aliases, safe appends, and cancellation precedence
 
 OVERLAP_MODELS = """
-from mobilerun_routines import key_field
+from mobilerun_functions import key_field
 
 class In(BaseModel):
     pass
@@ -373,7 +373,7 @@ class Item(BaseModel):
 """
 
 COMPUTED_MODELS = """
-from mobilerun_routines import key_field
+from mobilerun_functions import key_field
 from pydantic import ConfigDict, computed_field
 
 class In(BaseModel):
@@ -428,7 +428,7 @@ class _Interrupting:
 
 
 def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
-    from mobilerun_routines.dataset import DatasetFile
+    from mobilerun_functions.dataset import DatasetFile
 
     df = DatasetFile(tmp_path / "d.jsonl")
     df.append('{"id":"a"}')
@@ -448,8 +448,8 @@ def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
 def test_concurrent_appends_cannot_exceed_the_limit(tmp_path):
     import threading
 
-    from mobilerun_routines import DatasetTooLargeError
-    from mobilerun_routines.dataset import DatasetFile
+    from mobilerun_functions import DatasetTooLargeError
+    from mobilerun_functions.dataset import DatasetFile
 
     df = DatasetFile(tmp_path / "d.jsonl")
     df._fh = _Interrupting(df._fh, delay=0.2)

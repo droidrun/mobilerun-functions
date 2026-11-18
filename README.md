@@ -1,4 +1,4 @@
-# mobilerun-routines
+# mobilerun-functions
 
 Python package for writing Mobilerun routine scripts. A script has one typed entry point that
 receives a validated input model and a `Context` with what the platform provides, and returns
@@ -11,20 +11,20 @@ which needs `by_name` validation from pydantic 2.11).
 ## Install
 
 ```sh
-pip install mobilerun-routines
+pip install mobilerun-functions
 ```
 
-For device control add the extra: `pip install "mobilerun-routines[device]"`.
+For device control add the extra: `pip install "mobilerun-functions[device]"`.
 
 ## Hello
 
 Create a working script and inspect its contract:
 
 ```sh
-python -m mobilerun_routines new hello.py
-python -m mobilerun_routines inspect hello.py
+python -m mobilerun_functions new hello.py
+python -m mobilerun_functions inspect hello.py
 printf '{"name":"Ada"}\n' > in.json
-python -m mobilerun_routines run hello.py --input-file in.json --result-file out.json
+python -m mobilerun_functions run hello.py --input-file in.json --result-file out.json
 cat out.json
 # {"ok":true,"outcome":"succeeded","result":{"message":"Hello, Ada!"},"input":{"name":"Ada","greeting":"Hello"}}
 ```
@@ -33,7 +33,7 @@ A script is one Python file with this shape (the starter also has a `greeting` i
 
 ```python
 from pydantic import BaseModel
-from mobilerun_routines import Context, script
+from mobilerun_functions import Context, script
 
 
 class Input(BaseModel):
@@ -50,7 +50,7 @@ def main(input: Input, ctx: Context) -> Output:
     return Output(message=f"Hello, {input.name}!")
 ```
 
-- **Import.** `script` and `Context` come from `mobilerun_routines`, nothing else
+- **Import.** `script` and `Context` come from `mobilerun_functions`, nothing else
   (`from mobilerun import script` does not exist).
 - **Entry point.** Mark exactly one function with the bare decorator `@script`. It may be `def`
   or `async def`, takes `input` (a pydantic model) and, optionally, `ctx: Context`.
@@ -65,7 +65,7 @@ def main(input: Input, ctx: Context) -> Output:
   it on stdout (the result goes to the result file), and `inspect` moves it to stderr so stdout
   holds only its JSON document.
 - **Time limit.** The platform sets it; the script does not.
-- **Starter.** `python -m mobilerun_routines new hello.py` writes a working script in this shape.
+- **Starter.** `python -m mobilerun_functions new hello.py` writes a working script in this shape.
 
 When a script is not set up this way, `inspect` reports what is wrong with a line number and a
 repair hint (see below).
@@ -78,7 +78,7 @@ The decorator returns the original function, so call it directly in a test:
 
 ```python
 from hello import Input, main
-from mobilerun_routines import Context, RunInfo, State
+from mobilerun_functions import Context, RunInfo, State
 
 
 def test_greeting() -> None:
@@ -106,7 +106,7 @@ Save this as `counter.py`:
 
 ```python
 from pydantic import BaseModel
-from mobilerun_routines import Context, script
+from mobilerun_functions import Context, script
 
 
 class Input(BaseModel):
@@ -130,7 +130,7 @@ In a fresh directory (with no `state.json`), run it twice:
 ```sh
 printf '{}\n' > in.json
 for attempt in 1 2; do
-  python -m mobilerun_routines run counter.py --input-file in.json --result-file out.json \
+  python -m mobilerun_functions run counter.py --input-file in.json --result-file out.json \
     --state-file state.json --attempt "$attempt"
   python -c 'import json; d=json.load(open("out.json")); print(d["result"]); json.dump(d["state"],open("state.json","w"))'
 done
@@ -166,7 +166,7 @@ this run wrote. Without it, `result` holds `{"items": [...]}` with pushed items 
 then returned items. Returning `None` for `Dataset[Item]` publishes the pushed items,
 including an empty dataset when nothing was pushed. This also applies to `Dataset[Item] | None`.
 Static checking accepts models and dictionaries for `push`; the precise `Item` shape is checked
-at runtime. For direct tests, pass `DatasetSink(item_type=Item)` from `mobilerun_routines.dataset`
+at runtime. For direct tests, pass `DatasetSink(item_type=Item)` from `mobilerun_functions.dataset`
 to `Context(..., dataset=...)`.
 
 Instead of pushing, return the items together:
@@ -184,7 +184,7 @@ def main(input: Input, ctx: Context) -> Dataset[Product]:
 from datetime import date
 
 from pydantic import BaseModel, Field
-from mobilerun_routines import Context, Dataset, ScriptError, key_field, script
+from mobilerun_functions import Context, Dataset, ScriptError, key_field, script
 
 
 class Input(BaseModel):
@@ -231,7 +231,7 @@ partial result, and use `ctx.state` to carry data to the next run.
 | `run.device_platform` | Optional local device platform: `android` or `ios`. |
 | `run.device_url` | Optional local Portal HTTP URL. |
 | `log.info` / `log.warning` / `log.error` | One line on stderr per call. |
-| `log.status` | Replaces the file named by `MOBILERUN_ROUTINES_STATUS_FILE`; no-op if unset, best effort. |
+| `log.status` | Replaces the file named by `MOBILERUN_FUNCTIONS_STATUS_FILE`; no-op if unset, best effort. |
 | `state.previous` / `state.previous_schema` | Prior saved JSON data and its schema number, or `None`. |
 | `state.save(data, schema=1)` | Copies a JSON value or model; requires `--state-file` in CLI runs. |
 | `dataset.push(item)` | Validates and emits an item for a dataset entry point; buffers without a file. |
@@ -256,7 +256,7 @@ def main(input: Input, ctx: Context) -> None:
 ```
 
 The device is the unchanged `mobilerun_core.Device`; see that package for all its methods. It is
-an optional dependency: install `mobilerun-routines[device]`. A run without a device, without
+an optional dependency: install `mobilerun-functions[device]`. A run without a device, without
 `mobilerun-core`, or without the platform's environment raises `NotAvailableError`; scripts
 never build a client or read the environment. The platform handles the credentials and sets the
 API base URL in `MOBILERUN_BASE_URL`; the older `MOBILERUN_API_BASE_URL` is still read when the
@@ -265,7 +265,7 @@ new name is unset or empty.
 ### Run against a local device
 
 To test a script against your own emulator or phone, install the extra
-(`pip install "mobilerun-routines[local]"`) and pass the device to `run`:
+(`pip install "mobilerun-functions[local]"`) and pass the device to `run`:
 
 - `--device-target local|cloud`: where the device lives (default `cloud`, which is the platform's
   behaviour and needs no flag).
@@ -274,11 +274,11 @@ To test a script against your own emulator or phone, install the extra
 
 ```sh
 # Android over ADB: the device id is the serial from `adb devices`
-python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
+python -m mobilerun_functions run script.py --input-file in.json --result-file out.json \
   --device-id emulator-5554 --device-target local
 
 # iOS through its Portal URL
-python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
+python -m mobilerun_functions run script.py --input-file in.json --result-file out.json \
   --device-target local --device-platform ios --device-url http://192.168.1.20:6643
 ```
 
@@ -294,13 +294,13 @@ URL or required token raises `NotAvailableError`.
 
 ```sh
 # write a starter script (fails if the file exists; the directory must exist)
-python -m mobilerun_routines new hello.py
+python -m mobilerun_functions new hello.py
 
 # print the entry point and the input/output JSON Schema (exit 3 if there is no valid entry point)
-python -m mobilerun_routines inspect script.py
+python -m mobilerun_functions inspect script.py
 
 # validate input, call the entry point, write one result envelope
-python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
+python -m mobilerun_functions run script.py --input-file in.json --result-file out.json \
     [--state-file state.json] [--dataset-file dataset.jsonl]
 ```
 
@@ -331,9 +331,9 @@ code:
 <!-- inspect-codes:start -->
 - `syntax_error`: the file does not compile; the issue has the line.
 - `import_wrong_module`: `script` (or `Context` from a `mobilerun*` module) is imported from a
-  module other than `mobilerun_routines`, for example `from mobilerun import script`.
+  module other than `mobilerun_functions`, for example `from mobilerun import script`.
 - `import_missing`: a function is decorated with `@script` but `script` is not imported from
-  `mobilerun_routines`.
+  `mobilerun_functions`.
 - `no_entry_point`: no function is marked with `@script`.
 - `entry_point_invalid`: two functions are marked with `@script`, or the signature does not fit;
   unresolved annotations such as a missing `Context` import get the repair hint.
@@ -350,7 +350,7 @@ code:
 ```json
 {"ok": false,
  "error": {"code": "import_missing", "message": "...", "line": 9,
-           "repair": {"action": "fix_script", "hint": "Add `from mobilerun_routines import ..."}},
+           "repair": {"action": "fix_script", "hint": "Add `from mobilerun_functions import ..."}},
  "errors": ["... every issue, in line order, the first one equal to `error` ..."],
  "warnings": []}
 ```

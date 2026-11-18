@@ -16,7 +16,7 @@ from .errors import EntryPointError, NoEntryPointError
 from .loader import ScriptImportError, ScriptSyntaxError
 from .schema import SchemaError
 
-PACKAGE = "mobilerun_routines"
+PACKAGE = "mobilerun_functions"
 
 SYNTAX_ERROR = "syntax_error"
 IMPORT_WRONG_MODULE = "import_wrong_module"
@@ -39,12 +39,14 @@ INSPECT_ERROR_CODES = (
 
 # One hint for every "the script is not set up as a routine script" problem.
 SCRIPT_HINT = (
-    "Add `from mobilerun_routines import Context, script` and decorate one function: "
+    "Add `from mobilerun_functions import Context, script` and decorate one function: "
     "`@script` `def main(input: Input, ctx: Context) -> Output:`"
 )
 
 # Modules newcomers import `script` from by mistake.
-_WRONG_MODULES = frozenset({"mobilerun", "mobilerun_sandbox", "mobilerun_sdk"})
+_WRONG_MODULES = frozenset(
+    {"mobilerun", "mobilerun_routines", "mobilerun_sandbox", "mobilerun_sdk"}
+)
 _SDK_NAMES = ("script", "Context")
 
 
