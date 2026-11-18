@@ -5,7 +5,7 @@ import textwrap
 
 import pytest
 
-from mobilerun_routines._check import SCRIPT_HINT
+from mobilerun_functions._check import SCRIPT_HINT
 
 MODELS = """\
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ def main(input: Input, ctx: Context) -> Output:
     return Output(message=input.name)
 """
 
-GOOD_IMPORT = "from mobilerun_routines import Context, script\n"
+GOOD_IMPORT = "from mobilerun_functions import Context, script\n"
 
 
 def _source(*parts: str) -> str:
@@ -50,7 +50,7 @@ def test_a_script_without_a_decorator(inspect_source):
     assert _codes(doc) == [("no_entry_point", None)]
     # The hint text is the contract: the correct import and a one-line example.
     hint = (
-        "Add `from mobilerun_routines import Context, script` and decorate one function: "
+        "Add `from mobilerun_functions import Context, script` and decorate one function: "
         "`@script` `def main(input: Input, ctx: Context) -> Output:`"
     )
     assert doc["error"]["repair"] == {"action": "fix_script", "hint": hint}
@@ -58,7 +58,7 @@ def test_a_script_without_a_decorator(inspect_source):
 
 
 def test_a_decorator_without_the_import(inspect_source):
-    source = _source(MODELS, "from mobilerun_routines import Context", "@script\n" + BODY)
+    source = _source(MODELS, "from mobilerun_functions import Context", "@script\n" + BODY)
     doc, err = _failure(inspect_source, source)
     line = source.splitlines().index("@script") + 1
     assert _codes(doc) == [("import_missing", line)]
@@ -67,12 +67,14 @@ def test_a_decorator_without_the_import(inspect_source):
 
 
 def test_import_missing_is_reported_once_for_a_called_decorator(inspect_source):
-    source = _source(MODELS, "from mobilerun_routines import Context", "@script()\n" + BODY)
+    source = _source(MODELS, "from mobilerun_functions import Context", "@script()\n" + BODY)
     doc, _ = _failure(inspect_source, source)
     assert [e["code"] for e in doc["errors"]] == ["import_missing"]
 
 
-@pytest.mark.parametrize("module", ["mobilerun", "mobilerun_sandbox", "mobilerun_sdk"])
+@pytest.mark.parametrize(
+    "module", ["mobilerun", "mobilerun_routines", "mobilerun_sandbox", "mobilerun_sdk"]
+)
 def test_script_imported_from_the_wrong_module(inspect_source, module):
     source = _source(f"from {module} import script", MODELS, "@script\n" + BODY)
     doc, _ = _failure(inspect_source, source)
@@ -84,7 +86,7 @@ def test_script_imported_from_the_wrong_module(inspect_source, module):
 
 def test_context_imported_from_the_wrong_module(inspect_source):
     source = _source(
-        "from mobilerun_routines import script\nfrom mobilerun_sdk import Context",
+        "from mobilerun_functions import script\nfrom mobilerun_sdk import Context",
         MODELS,
         "@script\n" + BODY,
     )
@@ -136,10 +138,10 @@ def test_a_duplicate_entry_point_is_the_loaders_failure_with_the_line(inspect_so
 @pytest.mark.parametrize(
     "header",
     [
-        "from mobilerun_routines import Context, script",
-        "from mobilerun_routines import Context, script as marker",
-        "import mobilerun_routines as mr\nfrom mobilerun_routines import Context",
-        "from mobilerun_routines import *",
+        "from mobilerun_functions import Context, script",
+        "from mobilerun_functions import Context, script as marker",
+        "import mobilerun_functions as mr\nfrom mobilerun_functions import Context",
+        "from mobilerun_functions import *",
     ],
 )
 def test_valid_imports_pass(inspect_source, header):
@@ -154,9 +156,9 @@ def test_valid_imports_pass(inspect_source, header):
     "header",
     [
         "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from mobilerun import script\n"
-        "from mobilerun_routines import Context, script",
-        "from mobilerun_routines import Context, script\nentry = script",
-        "import functools\nfrom mobilerun_routines import Context, script\nother = functools",
+        "from mobilerun_functions import Context, script",
+        "from mobilerun_functions import Context, script\nentry = script",
+        "import functools\nfrom mobilerun_functions import Context, script\nother = functools",
     ],
     ids=["type-checking-import", "alias-assignment", "unrelated-attribute"],
 )
@@ -169,7 +171,7 @@ def test_valid_patterns_the_loader_accepts_are_never_rejected(inspect_source, he
 
 def test_an_unrelated_attribute_decorator_is_accepted(inspect_source):
     source = _source(
-        "import functools\nfrom mobilerun_routines import Context, script",
+        "import functools\nfrom mobilerun_functions import Context, script",
         MODELS,
         "class Other:\n    script = staticmethod(lambda f: f)",
         "@script\n" + BODY,
@@ -182,8 +184,8 @@ def test_an_unrelated_attribute_decorator_is_accepted(inspect_source):
 def test_a_name_script_bound_locally_is_not_import_missing(inspect_source):
     source = _source(
         MODELS,
-        "from mobilerun_routines import Context",
-        "def run(script):\n    return script\n\nfrom mobilerun_routines import script as marker",
+        "from mobilerun_functions import Context",
+        "def run(script):\n    return script\n\nfrom mobilerun_functions import script as marker",
         "@marker\n" + BODY,
     )
     code, _, err = inspect_source(source)
@@ -197,7 +199,7 @@ def test_the_decorator_applied_as_a_call_is_an_entry_point(inspect_source):
 
 
 def test_the_starter_passes_with_no_warnings(tmp_path, capsys):
-    from mobilerun_routines import cli
+    from mobilerun_functions import cli
 
     path = tmp_path / "hello.py"
     assert cli.main(["new", str(path)]) == 0
@@ -214,8 +216,8 @@ def test_runtime_name_error_for_script_gets_the_hint_and_the_line(inspect_source
     # The import exists, but where it never runs: the static check cannot tell.
     source = _source(
         MODELS,
-        "from mobilerun_routines import Context\n\n"
-        "def setup():\n    from mobilerun_routines import script",
+        "from mobilerun_functions import Context\n\n"
+        "def setup():\n    from mobilerun_functions import script",
         "@script\n" + BODY,
     )
     doc, _ = _failure(inspect_source, source)
@@ -226,7 +228,7 @@ def test_runtime_name_error_for_script_gets_the_hint_and_the_line(inspect_source
 
 
 def test_runtime_name_error_for_context_gets_the_hint(inspect_source):
-    source = _source("from mobilerun_routines import script", MODELS, "@script\n" + BODY)
+    source = _source("from mobilerun_functions import script", MODELS, "@script\n" + BODY)
     doc, _ = _failure(inspect_source, source)
     error = doc["error"]
     # The loader reports unresolved annotations as an invalid entry point.

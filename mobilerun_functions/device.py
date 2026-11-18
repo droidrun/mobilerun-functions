@@ -25,7 +25,7 @@ LEGACY_API_KEY_ENV = "MOBILERUN_CLOUD_API_KEY"
 
 _LOCAL_HINT = (
     "is not available: the local device backend is not installed "
-    "(install mobilerun-routines[local])"
+    "(install mobilerun-functions[local])"
 )
 
 
@@ -75,7 +75,8 @@ def _connect_cloud(device_id: str | None) -> Device:
         core = importlib.import_module("mobilerun_core")
     except ImportError:
         raise _missing(
-            "is not available: mobilerun-core is not installed (install mobilerun-routines[device])"
+            "is not available: mobilerun-core is not installed "
+            "(install mobilerun-functions[device])"
         ) from None
     base_url = os.environ.get(API_BASE_URL_ENV) or os.environ.get(LEGACY_API_BASE_URL_ENV)
     api_key = os.environ.get(API_KEY_ENV) or os.environ.get(LEGACY_API_KEY_ENV)

@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from mobilerun_routines import Context, NotAvailableError
-from mobilerun_routines.context import RunInfo
-from mobilerun_routines.device import (
+from mobilerun_functions import Context, NotAvailableError
+from mobilerun_functions.context import RunInfo
+from mobilerun_functions.device import (
     API_BASE_URL_ENV,
     API_KEY_ENV,
     LEGACY_API_BASE_URL_ENV,
@@ -232,14 +232,14 @@ def test_local_backend_missing_names_extra(
     fake_core: FakeCore, fake_local: None, monkeypatch: pytest.MonkeyPatch, missing: str
 ) -> None:
     monkeypatch.setitem(sys.modules, missing, None)
-    with pytest.raises(NotAvailableError, match=r"mobilerun-routines\[local\]"):
+    with pytest.raises(NotAvailableError, match=r"mobilerun-functions\[local\]"):
         local_ctx("x").device()
     assert fake_core.connects == []
 
 
 SCRIPT = """
 from pydantic import BaseModel
-from mobilerun_routines import Context, script
+from mobilerun_functions import Context, script
 
 class In(BaseModel):
     pass

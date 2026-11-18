@@ -281,7 +281,7 @@ wheels = [
 ]
 
 [[package]]
-name = "mobilerun-routines"
+name = "mobilerun-functions"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

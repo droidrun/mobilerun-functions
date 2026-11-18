@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 from script_source import GREETER, script_source, without_input
 
-from mobilerun_routines import (
+from mobilerun_functions import (
     ERROR_MESSAGE_MAX_CHARS,
     RESULT_MAX_BYTES,
     STATE_MAX_BYTES,
     cli,
 )
-from mobilerun_routines._io import atomic_write_text
+from mobilerun_functions._io import atomic_write_text
 
 
 def test_success(run_script):
@@ -303,7 +303,7 @@ def test_run_info_defaults(run_script):
 
 def test_log_goes_to_stderr_and_status_to_file(run_script, tmp_path, monkeypatch):
     status = tmp_path / "status.txt"
-    monkeypatch.setenv("MOBILERUN_ROUTINES_STATUS_FILE", str(status))
+    monkeypatch.setenv("MOBILERUN_FUNCTIONS_STATUS_FILE", str(status))
     body = """
     ctx.log.info("one")
     ctx.log.warning("two\\nlines")
@@ -319,7 +319,7 @@ def test_log_goes_to_stderr_and_status_to_file(run_script, tmp_path, monkeypatch
 
 
 def test_status_without_env_is_a_noop(run_script, monkeypatch):
-    monkeypatch.delenv("MOBILERUN_ROUTINES_STATUS_FILE", raising=False)
+    monkeypatch.delenv("MOBILERUN_FUNCTIONS_STATUS_FILE", raising=False)
     r = run_script(script_source('ctx.log.status("nothing happens")', ret="None"))
     assert r.code == 0
 
@@ -407,7 +407,7 @@ DATASET = script_source(
     'return Dataset(items=[Item(id="a", price=1.5), {"id": "b", "price": 2}])',
     ret="Dataset[Item]",
     before="""
-    from mobilerun_routines import key_field
+    from mobilerun_functions import key_field
     class Item(BaseModel):
         id: str = key_field()
         price: float
@@ -588,7 +588,7 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
     script = write_script(GREETER)
     inp, out = tmp_path / "in.json", tmp_path / "out.json"
     inp.write_text('{"name": "proc"}')
-    base = [sys.executable, "-m", "mobilerun_routines"]
+    base = [sys.executable, "-m", "mobilerun_functions"]
     inspected = subprocess.run([*base, "inspect", str(script)], capture_output=True, text=True)
     assert inspected.returncode == 0
     assert json.loads(inspected.stdout)["entrypoint"] == "main"
@@ -605,7 +605,7 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
 def test_pyproject_uses_dynamic_sdk_version():
     data = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     assert "version" in data["project"]["dynamic"]
-    assert data["tool"]["hatch"]["version"]["path"] == "mobilerun_routines/_version.py"
+    assert data["tool"]["hatch"]["version"]["path"] == "mobilerun_functions/_version.py"
 
 
 # the envelope reports the input the entry point received
