@@ -32,7 +32,7 @@ def test_inspect_sample(inspect_source):
     assert doc["warnings"] == []
     assert doc["ok"] is True and doc["datasetKey"] is None
     assert doc["entrypoint"] == "main" and doc["async"] is False
-    assert doc["sdkVersion"] == SDK_VERSION == "0.1.0" and doc["outputKind"] == "value"
+    assert doc["sdkVersion"] == SDK_VERSION == "0.1.0rc1" and doc["outputKind"] == "value"
     assert doc["inputSchema"] == {
         "type": "object",
         "properties": {
