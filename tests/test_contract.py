@@ -1,20 +1,20 @@
-"""Contract fixes B1-B3: error codes and messages, state schema, aliases."""
+"""Error codes and messages, previous state schema, and output aliases."""
 
 import json
 
 import pytest
-from script_source import script_source
+from script_source import script_source, without_input
 
-from mobilerun_routines import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
+from mobilerun_functions import ERROR_MESSAGE_MAX_CHARS, RESERVED_ERROR_CODES
 
-# B1: ScriptError code and message are checked
+# ScriptError codes and messages are validated
 
 
 @pytest.mark.parametrize("code", sorted(RESERVED_ERROR_CODES))
 def test_script_cannot_take_a_reserved_code(run_script, code):
     r = run_script(script_source(f'raise ScriptError({code!r}, "mine", retryable=True)'))
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {"code": "script_error", "message": "mine", "retryable": True},
     }
@@ -35,6 +35,7 @@ def test_script_error_code_must_match_the_pattern(run_script, code):
 def test_valid_script_error_codes_are_kept(run_script, code):
     r = run_script(script_source(f'raise ScriptError({code!r}, "mine")'))
     assert r.envelope["error"]["code"] == code
+    assert "warning:" not in r.err
 
 
 def test_script_error_message_is_cut(run_script):
@@ -51,7 +52,7 @@ def test_script_error_raised_at_import_is_checked_too(run_script):
     assert r.code == 1 and r.envelope["error"]["code"] == "script_error"
 
 
-# B2: the schema of the previous state reaches the script
+# Previous state schema reaches the script
 
 
 def _schema_script(extra: str = ""):
@@ -73,7 +74,7 @@ def test_previous_schema_is_none_without_a_previous_state(run_script):
         assert r.code == 0 and "schema=None" in r.err
 
 
-# B3: aliases
+# Output aliases match the inspected schema
 
 ALIAS_KINDS = {
     "alias": 'user_name: str = Field(alias="userName")',
@@ -175,7 +176,7 @@ def test_dict_return_uses_validation_names(run_script):
 
 
 
-# Fix round 1: re-validation reads field names, never aliases, and ignores computed fields
+# Re-validation reads field names and ignores computed fields
 
 OVERLAP = """
 class In(BaseModel):
@@ -239,7 +240,7 @@ def test_computed_fields_do_not_hide_a_bad_instance(run_script):
     assert r.code == 1 and r.envelope["error"]["code"] == "output_invalid"
 
 
-# Fix round 1: an envelope is always written
+# Error formatting failures still produce an envelope
 
 
 SNEAKY = """
@@ -282,9 +283,47 @@ def test_non_string_code_becomes_script_error(run_script):
     r = run_script(script_source('raise ScriptError(5, "mine")'))
     assert r.envelope["error"]["code"] == "script_error"
     assert r.envelope["error"]["message"] == "mine"
+    assert "warning: ScriptError code '5' is invalid or reserved" in r.err
 
 
 def test_a_str_subclass_cannot_smuggle_a_reserved_code(run_script):
     body = SNEAKY + '\nraise ScriptError(Sneaky("cancelled"), "mine")'
     r = run_script(script_source(body))
     assert r.code == 1 and r.envelope["error"]["code"] == "script_error"
+
+
+@pytest.mark.parametrize(
+    "models,ret,decorator",
+    [
+        ('class In(BaseModel):\n    name: str = Field(pattern="x")\n', "None", "@script"),
+        (
+            "class In(BaseModel):\n    pass\nclass Item(BaseModel):\n    id: str\n",
+            "Dataset[Item]",
+            "@script",
+        ),
+        ("class In(BaseModel):\n    pass\n", "None", ""),
+        ("class In(BaseModel):\n    pass\n", "list[In]", "@script"),
+    ],
+)
+def test_run_reuses_inspect_contract_before_reading_input(
+    run_script, inspect_source, models, ret, decorator
+):
+    source = script_source(models=models, ret=ret, decorator=decorator)
+    code, out, err = inspect_source(source)
+    ran = run_script(source, raw_input="not json")
+    assert code == ran.code == 3 and ran.envelope is None
+    assert json.loads(out)["ok"] is False and ran.out == "" and ran.err == err
+
+
+@pytest.mark.parametrize("code,expected", [
+    ("Bad", "warning: ScriptError code 'Bad' is invalid or reserved; reported as script_error"),
+    ("cancelled", "warning: ScriptError code 'cancelled' is invalid or reserved; "
+     "reported as script_error"),
+    ("two\nlines", r"warning: ScriptError code 'two\nlines' is invalid or reserved; "
+     "reported as script_error"),
+])
+def test_invalid_script_error_code_warns_once(run_script, code, expected):
+    r = run_script(script_source(f'raise ScriptError({code!r}, "mine")'))
+    warnings = [line for line in r.err.splitlines() if line.startswith("warning:")]
+    assert warnings == [expected]
+    assert r.envelope["error"]["code"] == "script_error"

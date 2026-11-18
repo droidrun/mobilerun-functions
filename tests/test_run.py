@@ -5,22 +5,21 @@ import tomllib
 from pathlib import Path
 
 import pytest
-from script_source import GREETER, script_source
+from script_source import GREETER, script_source, without_input
 
-from mobilerun_routines import (
+from mobilerun_functions import (
     ERROR_MESSAGE_MAX_CHARS,
     RESULT_MAX_BYTES,
     STATE_MAX_BYTES,
     cli,
 )
-from mobilerun_routines._io import atomic_write_text
-from mobilerun_routines._version import SDK_VERSION
+from mobilerun_functions._io import atomic_write_text
 
 
 def test_success(run_script):
     r = run_script(GREETER, {"name": "ada", "count": 2})
     assert r.code == 0
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "succeeded",
         "result": {"greeting": "hi ada x2"},
@@ -33,7 +32,7 @@ def test_script_error(run_script):
         script_source('raise ScriptError("login_failed", "bad password", retryable=True)')
     )
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {"code": "login_failed", "message": "bad password", "retryable": True},
     }
@@ -248,7 +247,7 @@ def test_async_entry_point(run_script):
 def test_none_return(run_script):
     r = run_script(script_source(sig="input: In", ret="None"))
     assert r.code == 0
-    assert r.envelope == {"ok": True, "outcome": "succeeded", "result": None}
+    assert without_input(r.envelope) == {"ok": True, "outcome": "succeeded", "result": None}
 
 
 def test_optional_output_returning_none(run_script):
@@ -304,7 +303,7 @@ def test_run_info_defaults(run_script):
 
 def test_log_goes_to_stderr_and_status_to_file(run_script, tmp_path, monkeypatch):
     status = tmp_path / "status.txt"
-    monkeypatch.setenv("MOBILERUN_ROUTINES_STATUS_FILE", str(status))
+    monkeypatch.setenv("MOBILERUN_FUNCTIONS_STATUS_FILE", str(status))
     body = """
     ctx.log.info("one")
     ctx.log.warning("two\\nlines")
@@ -320,7 +319,7 @@ def test_log_goes_to_stderr_and_status_to_file(run_script, tmp_path, monkeypatch
 
 
 def test_status_without_env_is_a_noop(run_script, monkeypatch):
-    monkeypatch.delenv("MOBILERUN_ROUTINES_STATUS_FILE", raising=False)
+    monkeypatch.delenv("MOBILERUN_FUNCTIONS_STATUS_FILE", raising=False)
     r = run_script(script_source('ctx.log.status("nothing happens")', ret="None"))
     assert r.code == 0
 
@@ -335,7 +334,7 @@ def test_partial_with_result(run_script):
         )
     )
     assert r.code == 0
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "partial",
         "partialReason": "page 2 of 3 failed",
@@ -345,7 +344,7 @@ def test_partial_with_result(run_script):
 
 def test_partial_without_result(run_script):
     r = run_script(script_source('ctx.partial("nothing usable")', ret="None"))
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "partial",
         "partialReason": "nothing usable",
@@ -387,7 +386,7 @@ def test_result_exactly_at_the_limit(run_script):
 def test_result_one_byte_over_the_limit(run_script):
     r = run_script(SIZED, {"extra": 1})
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {
             "code": "result_too_large",
@@ -408,8 +407,9 @@ DATASET = script_source(
     'return Dataset(items=[Item(id="a", price=1.5), {"id": "b", "price": 2}])',
     ret="Dataset[Item]",
     before="""
+    from mobilerun_functions import key_field
     class Item(BaseModel):
-        id: str
+        id: str = key_field()
         price: float
     """,
 )
@@ -448,7 +448,10 @@ def test_state_flag_absent(run_script):
 def test_state_save_without_flag_raises(run_script):
     r = run_script(STATE_SCRIPT, {"name": "save"})
     assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.state.save")
+    assert r.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.state.save is not available in this run: "
+        "pass --state-file PATH to run"
+    )
 
 
 def test_state_null(run_script):
@@ -467,6 +470,30 @@ def test_state_previous_snapshot(run_script):
     r = run_script(STATE_SCRIPT, state=previous)
     assert r.code == 0 and "prev={'n': 41} schema=3" in r.err
     assert "state" not in r.envelope  # nothing saved, nothing returned
+
+
+def test_state_model_alias_round_trip(run_script):
+    source = script_source(
+        '''
+        previous = Saved.model_validate(ctx.state.previous or {})
+        ctx.log.info(f"prev={previous.last_seen}")
+        ctx.state.save(Saved(lastSeen=previous.last_seen + 1))
+        ''',
+        ret="None",
+        models='''
+        class In(BaseModel):
+            pass
+
+        class Saved(BaseModel):
+            last_seen: int = Field(0, alias="lastSeen")
+        ''',
+    )
+    first = run_script(source, state=None)
+    assert first.code == 0
+    second = run_script(source, state=first.envelope["state"])
+    assert second.code == 0
+    assert second.err.splitlines() == ["[INFO] prev=1"]
+    assert first.envelope["state"] == {"meta": {"schema": 1}, "data": {"lastSeen": 1}}
 
 
 def test_state_save_default_schema_and_last_call_wins(run_script):
@@ -497,7 +524,7 @@ def test_state_exactly_at_the_limit(run_script):
 def test_state_oversize_fails_the_run(run_script):
     r = run_script(_state_size_script(1), state=None)
     assert r.code == 1
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": False,
         "error": {
             "code": "state_too_large",
@@ -561,7 +588,7 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
     script = write_script(GREETER)
     inp, out = tmp_path / "in.json", tmp_path / "out.json"
     inp.write_text('{"name": "proc"}')
-    base = [sys.executable, "-m", "mobilerun_routines"]
+    base = [sys.executable, "-m", "mobilerun_functions"]
     inspected = subprocess.run([*base, "inspect", str(script)], capture_output=True, text=True)
     assert inspected.returncode == 0
     assert json.loads(inspected.stdout)["entrypoint"] == "main"
@@ -575,6 +602,149 @@ def test_module_invocation_in_a_subprocess(write_script, tmp_path):
     assert not (tmp_path / "__pycache__").exists()
 
 
-def test_sdk_version_matches_pyproject():
+def test_pyproject_uses_dynamic_sdk_version():
     data = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
-    assert data["project"]["version"] == SDK_VERSION
+    assert "version" in data["project"]["dynamic"]
+    assert data["tool"]["hatch"]["version"]["path"] == "mobilerun_functions/_version.py"
+
+
+# the envelope reports the input the entry point received
+
+ALIASED_MODELS = """
+class In(BaseModel):
+    name: str = "world"
+    max_pages: int = Field(default=3, serialization_alias="maxPages")
+    since: date | None = None
+
+class Out(BaseModel):
+    greeting: str
+"""
+
+
+def test_the_envelope_reports_the_input_after_defaults(run_script):
+    r = run_script(script_source('return Out(greeting="x")', models=ALIASED_MODELS), {})
+    assert r.code == 0
+    assert r.envelope["input"] == {"name": "world", "maxPages": 3, "since": None}
+
+
+def test_the_reported_input_is_json_mode_with_aliases(run_script):
+    r = run_script(
+        script_source('return Out(greeting="x")', models=ALIASED_MODELS),
+        {"since": "2026-11-13", "max_pages": 5},
+    )
+    assert r.envelope["input"] == {"name": "world", "maxPages": 5, "since": "2026-11-13"}
+
+
+def test_a_failed_run_reports_the_input_too(run_script):
+    r = run_script(script_source('raise ScriptError("nope", "no")'), {"name": "ada"})
+    assert r.code == 1 and r.envelope["error"]["code"] == "nope"
+    assert r.envelope["input"] == {"name": "ada", "count": 1, "extra": 0}
+
+
+def test_an_unexpected_exception_reports_the_input(run_script):
+    r = run_script(script_source('raise RuntimeError("boom")'), {})
+    assert r.envelope["error"]["code"] == "script_error"
+    assert r.envelope["input"]["name"] == "x"
+
+
+def test_invalid_input_has_no_input_field(run_script):
+    r = run_script(script_source(), {"count": "many"})
+    assert r.code == 2 and "input" not in r.envelope
+
+
+def test_no_entry_point_writes_no_envelope_at_all(run_script):
+    r = run_script("x = 1\n")
+    assert r.code == 3 and r.envelope is None
+
+
+def test_an_import_time_failure_has_no_input_field(run_script):
+    r = run_script("raise RuntimeError('at import')\n")
+    assert r.code == 1 and "input" not in r.envelope
+
+
+def test_a_huge_input_is_left_out_and_the_run_is_unchanged(run_script):
+    big = "x" * (800 * 1024)
+    r = run_script(script_source('return Out(greeting=input.name[:3])'), {"name": big})
+    assert r.code == 0 and without_input(r.envelope) == {
+        "ok": True,
+        "outcome": "succeeded",
+        "result": {"greeting": "xxx"},
+    }
+    assert "input" not in r.envelope
+
+
+def test_the_input_limit_is_64_kib_of_compact_json(run_script):
+    source = script_source('return Out(greeting="x")')
+    at_limit = run_script(source, {"name": "x" * (65536 - len('{"name":"","count":1,"extra":0}'))})
+    assert len(json.dumps(at_limit.envelope["input"], separators=(",", ":"))) == 65536
+    over = run_script(source, {"name": "x" * 65536})
+    assert over.code == 0 and "input" not in over.envelope
+
+
+def test_an_input_that_is_not_json_is_left_out_and_the_run_is_unchanged(run_script):
+    models = """
+    class In(BaseModel):
+        n: float
+
+    class Out(BaseModel):
+        n: float
+    """
+    source = script_source("return Out(n=1.0)", models=models, sig="input: In")
+    r = run_script(source, raw_input='{"n": 1e309}')
+    assert r.code == 0 and r.envelope == {
+        "ok": True,
+        "outcome": "succeeded",
+        "result": {"n": 1.0},
+    }
+
+
+def test_state_missing_file_then_envelope_round_trip(run_script, tmp_path):
+    first = run_script(
+        STATE_SCRIPT, {"name": "save"}, extra_args=["--state-file", str(tmp_path / "missing.json")]
+    )
+    assert first.code == 0
+    assert first.err.splitlines() == ["[INFO] prev=None schema=None"]
+    second = run_script(STATE_SCRIPT, state=first.envelope["state"])
+    assert second.code == 0
+    assert second.err.splitlines() == ["[INFO] prev={'seen': ['a', 'b'], 'n': 1} schema=2"]
+
+
+def test_failed_runs_have_one_stderr_summary(run_script):
+    r = run_script(script_source('raise ScriptError("bad", "two\\nlines")'))
+    assert r.code == 1
+    assert r.err.splitlines() == [r"error bad: two\nlines"]
+
+
+def test_output_failure_stderr_details_are_redacted(run_script):
+    r = run_script(script_source('return {"greeting": 123}'))
+    assert r.code == 1
+    assert r.err.splitlines() == [
+        'error output_invalid: the return value does not match Out '
+        '[{"path":"greeting","message":"string_type"}]'
+    ]
+    assert "123" not in r.err
+
+
+def test_input_failure_stderr_details_are_redacted(run_script):
+    r = run_script(script_source(), {"count": "SECRET"})
+    assert r.code == 2 and r.err.startswith("error input_invalid:")
+    assert "count" in r.err and "int_parsing" in r.err and "SECRET" not in r.err
+
+
+def test_required_output_rejects_none(run_script):
+    r = run_script(script_source())
+    assert r.code == 1 and r.envelope["error"] == {
+        "code": "output_invalid",
+        "message": "returned None; annotate the return type as `Output | None`",
+        "retryable": False,
+    }
+
+
+def test_missing_return_annotation_warns_but_runs(inspect_source, run_script):
+    source = script_source(ret=None)
+    code, out, _ = inspect_source(source)
+    assert code == 0
+    warnings = json.loads(out)["warnings"]
+    assert len(warnings) == 1
+    assert warnings[0]["code"] == "return_annotation_missing"
+    assert run_script(source).code == 0

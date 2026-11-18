@@ -7,42 +7,46 @@ import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from pydantic import BaseModel, StrictInt, TypeAdapter
+from pydantic import BaseModel, JsonValue, StrictInt, TypeAdapter
 
-from ._io import atomic_write_text, dumps_json
+from ._constants import RESULT_MAX_BYTES as RESULT_MAX_BYTES
+from ._constants import STATE_MAX_BYTES as STATE_MAX_BYTES
+from ._io import atomic_write_text, dumps_json, one_line
 from .dataset import DatasetSink
 from .device import connect_device
 from .errors import NotAvailableError
 
-RESULT_MAX_BYTES = 524288
-STATE_MAX_BYTES = 524288
-STATUS_FILE_ENV = "MOBILERUN_ROUTINES_STATUS_FILE"
+if TYPE_CHECKING:
+    from mobilerun_core import Device
+
+STATUS_FILE_ENV = "MOBILERUN_FUNCTIONS_STATUS_FILE"
 
 
 RunMode = Literal["live", "dry_run", "verification"]
-_STRICT_INT = TypeAdapter(StrictInt)
+DeviceTarget = Literal["local", "cloud"]
+DevicePlatform = Literal["android", "ios"]
+_STRICT_INT: TypeAdapter[int] = TypeAdapter(StrictInt)
 
 
 @dataclass(frozen=True)
 class RunInfo:
-    run_id: str
-    attempt: int
-    deadline: datetime | None
-    mode: RunMode
-    device_id: str | None
-
-
-def _one_line(msg: object) -> str:
-    return str(msg).replace("\r", "\\r").replace("\n", "\\n")
+    run_id: str = "local"
+    attempt: int = 1
+    deadline: datetime | None = None
+    mode: RunMode = "live"
+    device_id: str | None = None
+    device_target: DeviceTarget = "cloud"
+    device_platform: DevicePlatform | None = None
+    device_url: str | None = None
 
 
 class Log:
     """Log lines go to stderr; `status` publishes the latest status through a file."""
 
     def _write(self, level: str, msg: object) -> None:
-        sys.stderr.write(f"[{level}] {_one_line(msg)}\n")
+        sys.stderr.write(f"[{level}] {one_line(msg)}\n")
         sys.stderr.flush()
 
     def info(self, msg: object) -> None:
@@ -59,7 +63,7 @@ class Log:
         if not path:
             return
         try:
-            atomic_write_text(path, _one_line(msg) + "\n")
+            atomic_write_text(path, one_line(msg) + "\n")
         except OSError:
             pass  # status is best effort and never fails the script
 
@@ -77,8 +81,8 @@ class State:
 
     def __init__(
         self,
-        configured: bool = False,
-        previous: Any = None,
+        configured: bool = True,
+        previous: JsonValue = None,
         previous_schema: int | None = None,
     ) -> None:
         self._configured = configured
@@ -87,7 +91,7 @@ class State:
         self._saved: StateSnapshot | None = None
 
     @property
-    def previous(self) -> Any:
+    def previous(self) -> JsonValue:
         """Saved data of the last successful run, or `None`."""
         return self._previous
 
@@ -99,9 +103,13 @@ class State:
     def save(self, data: Any, schema: int = 1) -> None:
         """Record the snapshot the platform stores after a successful run (last call wins)."""
         if not self._configured:
-            raise NotAvailableError("state.save")
+            raise NotAvailableError(
+                "state.save", "is not available in this run: pass --state-file PATH to run"
+            )
         schema = _STRICT_INT.validate_python(schema)
-        payload = data.model_dump_json() if isinstance(data, BaseModel) else dumps_json(data)
+        payload = (
+            data.model_dump_json(by_alias=True) if isinstance(data, BaseModel) else dumps_json(data)
+        )
         # Copy now so later changes to `data` do not alter the snapshot.
         self._saved = StateSnapshot(schema=schema, data=json.loads(payload))
 
@@ -125,7 +133,7 @@ class Context:
         self.state = state if state is not None else State()
         self.dataset = dataset if dataset is not None else DatasetSink()
         self._partial_reason: str | None = None
-        self._device: Any = None
+        self._device: Device | None = None
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
@@ -137,20 +145,25 @@ class Context:
     def partial_reason(self) -> str | None:
         return self._partial_reason
 
-    def device(self) -> Any:
+    def device(self) -> Device:
         """The run's `mobilerun_core` device (connected once, then reused)."""
         if self._device is None:
-            self._device = connect_device(self.run.device_id)
+            self._device = connect_device(
+                self.run.device_id,
+                target=self.run.device_target,
+                platform=self.run.device_platform,
+                url=self.run.device_url,
+            )
         return self._device
 
     @property
-    def credentials(self) -> Any:
+    def credentials(self) -> NoReturn:
         raise NotAvailableError("credentials")
 
     @property
-    def files(self) -> Any:
+    def files(self) -> NoReturn:
         raise NotAvailableError("files")
 
     @property
-    def llm(self) -> Any:
+    def llm(self) -> NoReturn:
         raise NotAvailableError("llm")

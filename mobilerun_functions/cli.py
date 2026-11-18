@@ -1,4 +1,4 @@
-"""Command line: `python -m mobilerun_routines new|inspect|run`."""
+"""Command line: `python -m mobilerun_functions new|inspect|run`."""
 
 from __future__ import annotations
 
@@ -7,12 +7,14 @@ import contextlib
 import json
 import sys
 from datetime import datetime
+from pathlib import Path
 from typing import NoReturn, get_args
 
+from ._check import Issue, issues_for
+from ._contract import inspect_entry
 from ._template import STARTER_SCRIPT
-from ._version import SDK_VERSION
-from .context import RunInfo, RunMode
-from .errors import EntryPointError, NoEntryPointError
+from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
+from .errors import EntryPointError
 from .loader import ScriptImportError, load_script
 from .runner import (
     EXIT_NO_ENTRY_POINT,
@@ -22,9 +24,11 @@ from .runner import (
     RunOptions,
     run,
 )
-from .schema import SchemaError, dataset_key, input_schema, output_schema
+from .schema import SchemaError
 
 MODES = get_args(RunMode)
+DEVICE_TARGETS = get_args(DeviceTarget)
+DEVICE_PLATFORMS = get_args(DevicePlatform)
 
 
 class _Parser(argparse.ArgumentParser):
@@ -36,7 +40,7 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _Parser(prog="python -m mobilerun_routines")
+    parser = _Parser(prog="python -m mobilerun_functions")
     sub = parser.add_subparsers(dest="command", required=True, parser_class=_Parser)
 
     new_p = sub.add_parser("new", help="write a starter script")
@@ -54,7 +58,19 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--run-id", default="local")
     run_p.add_argument("--attempt", type=int, default=1)
     run_p.add_argument("--mode", choices=MODES, default="live")
-    run_p.add_argument("--device-id")
+    run_p.add_argument("--device-id", help="cloud device UUID, or ADB serial with local target")
+    run_p.add_argument(
+        "--device-target",
+        choices=DEVICE_TARGETS,
+        default="cloud",
+        help="where the device lives (default: cloud)",
+    )
+    run_p.add_argument(
+        "--device-platform",
+        choices=DEVICE_PLATFORMS,
+        help="local device platform (default: android); ios uses its Portal",
+    )
+    run_p.add_argument("--device-url", help="Portal HTTP URL of a local device")
     run_p.add_argument("--deadline", type=datetime.fromisoformat)
     return parser
 
@@ -76,50 +92,54 @@ def _new(path: str) -> int:
 
 def _inspect(path: str) -> int:
     try:
+        source = Path(path).read_bytes()
+    except OSError as exc:
+        return _reject(issues_for(exc, b"", path))
+    try:
         # The script runs at import: what it prints must not end up in the JSON on stdout.
         with contextlib.redirect_stdout(sys.stderr):
             entry = load_script(path)
-            output = output_schema(entry.output_model) if entry.output_model else None
-            document = {
-                "ok": True,
-                "entrypoint": entry.name,
-                "async": entry.is_async,
-                "inputSchema": input_schema(entry.input_model),
-                "outputSchema": output,
-                "outputKind": entry.output_kind,
-                "datasetKey": dataset_key(output) if entry.output_kind == "dataset" else None,
-                "sdkVersion": SDK_VERSION,
-            }
-    except OSError as exc:
-        return _reject("import_failed", f"cannot read script: {exc}")
-    except NoEntryPointError as exc:
-        return _reject("no_entry_point", str(exc))
-    except EntryPointError as exc:
-        return _reject("entry_point_invalid", str(exc))
-    except ScriptImportError as exc:
-        return _reject("import_failed", str(exc))
-    except SchemaError as exc:
-        return _reject("schema_unsupported", str(exc))
+            document = inspect_entry(entry)
+    except (OSError, EntryPointError, ScriptImportError, SchemaError) as exc:
+        return _reject(issues_for(exc, source, path))
     sys.stdout.write(json.dumps(document) + "\n")
     return EXIT_OK
 
 
-def _reject(code: str, message: str) -> int:
-    """Report why `inspect` failed: a JSON error on stdout and one line on stderr."""
-    message = " ".join(message.split())
-    document = {"ok": False, "error": {"code": code, "message": message}}
-    sys.stdout.write(json.dumps(document) + "\n")
-    sys.stderr.write(message + "\n")
+def _reject(errors: list[Issue], *, json_output: bool = True) -> int:
+    """Report issues on stderr and, for inspect, a JSON failure document on stdout.
+
+    `error` is the first of `errors`, the shape callers read before `errors` existed.
+    """
+    document = {
+        "ok": False,
+        "error": errors[0].as_json(),
+        "errors": [issue.as_json() for issue in errors],
+        "warnings": [],
+    }
+    if json_output:
+        sys.stdout.write(json.dumps(document) + "\n")
+    for issue in errors:
+        sys.stderr.write(issue.describe() + "\n")
     return EXIT_NO_ENTRY_POINT
 
 
-def _run(args: argparse.Namespace) -> int:
+def _invalid_device_flags(args: argparse.Namespace) -> bool:
+    return args.device_target != "local" and bool(args.device_platform or args.device_url)
+
+
+def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    if _invalid_device_flags(args):
+        parser.error("--device-platform and --device-url need --device-target local")
     info = RunInfo(
         run_id=args.run_id,
         attempt=args.attempt,
         deadline=args.deadline,
         mode=args.mode,
         device_id=args.device_id,
+        device_target=args.device_target,
+        device_platform=args.device_platform,
+        device_url=args.device_url,
     )
     opts = RunOptions(
         path=args.path,
@@ -131,18 +151,18 @@ def _run(args: argparse.Namespace) -> int:
     )
     try:
         return run(opts)
-    except EntryPointError as exc:
-        sys.stderr.write(f"{exc}\n")
-        return EXIT_NO_ENTRY_POINT
+    except (EntryPointError, SchemaError) as exc:
+        return _reject(issues_for(exc, Path(args.path).read_bytes(), args.path), json_output=False)
     except RunnerFault as exc:
         sys.stderr.write(f"{exc}\n")
         return EXIT_RUNNER_FAULT
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
     if args.command == "new":
         return _new(args.path)
     if args.command == "inspect":
         return _inspect(args.path)
-    return _run(args)
+    return _run(args, parser)

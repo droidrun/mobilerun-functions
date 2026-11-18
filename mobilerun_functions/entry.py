@@ -5,26 +5,32 @@ from __future__ import annotations
 import inspect
 import types
 import typing
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard, TypeVar
 
 from pydantic import BaseModel
 
+from ._constants import MODULE_NAME
 from .context import Context
 from .dataset import Dataset
 from .errors import EntryPointError
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 OutputKind = Literal["value", "dataset", "none"]
 
 
 @dataclass(frozen=True)
 class EntryPoint:
-    func: Any
+    func: Callable[..., Any]
     name: str
     is_async: bool
     takes_ctx: bool
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None
+    allows_none: bool
+    return_annotation_missing: bool
 
     @property
     def output_kind(self) -> OutputKind:
@@ -37,6 +43,7 @@ class EntryPoint:
         """The `Item` of a `Dataset[Item]` output; `Any` for a bare `Dataset`."""
         if self.output_kind != "dataset":
             return None
+        assert self.output_model is not None
         annotation = self.output_model.model_fields["items"].annotation
         (item,) = typing.get_args(annotation)
         return Any if isinstance(item, typing.TypeVar) else item
@@ -51,23 +58,18 @@ def take(module: str) -> EntryPoint | None:
     return _ENTRY_POINTS.pop(module, None)
 
 
-def reset() -> None:
-    """Forget every registered entry point."""
-    _ENTRY_POINTS.clear()
-
-
-def _is_model(tp: Any) -> bool:
+def _is_model(tp: Any) -> TypeGuard[type[BaseModel]]:
     return isinstance(tp, type) and issubclass(tp, BaseModel)
 
 
 def _describe(tp: Any) -> str:
-    return tp.__name__ if isinstance(tp, type) else repr(tp)
+    return (tp.__name__ if isinstance(tp, type) else repr(tp)).replace(f"{MODULE_NAME}.", "")
 
 
 def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
     if "return" not in hints:
         return None
-    tp = hints["return"]
+    tp: object = hints["return"]
     if tp is type(None):
         return None
     if typing.get_origin(tp) in (typing.Union, types.UnionType):
@@ -75,9 +77,12 @@ def _output_model(hints: dict[str, Any]) -> type[BaseModel] | None:
         if len(args) == 1:
             tp = args[0]
     if not _is_model(tp):
+        hint = (
+            "; return `Dataset[Item]` for a list of items" if typing.get_origin(tp) is list else ""
+        )
         raise EntryPointError(
             f"return: annotation must be a pydantic BaseModel subclass, "
-            f"'OutputModel | None' or None, got {_describe(tp)}"
+            f"'OutputModel | None', Dataset[Item] or None, got {_describe(tp)}{hint}"
         )
     return tp
 
@@ -135,10 +140,12 @@ def _build(func: Any) -> EntryPoint:
         takes_ctx=takes_ctx,
         input_model=input_model,
         output_model=output_model,
+        allows_none=(output_model is None or type(None) in typing.get_args(hints.get("return"))),
+        return_annotation_missing="return" not in hints,
     )
 
 
-def script(func: Any = None) -> Any:
+def script(func: F | None = None) -> F:
     """Mark the entry point: `def|async def main(input: In, ctx: Context) -> Out | None`."""
     if func is None or not callable(func):
         raise EntryPointError("@script takes no arguments; use it as a bare decorator")

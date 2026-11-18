@@ -1,4 +1,4 @@
-"""B4 (one incomplete signal), B5 (SIGTERM) and D1 (incremental dataset output)."""
+"""Partial results, incremental dataset output, and cancellation."""
 
 import json
 import signal
@@ -9,12 +9,12 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
-from script_source import script_source
+from script_source import script_source, without_input
 
-from mobilerun_routines import DATASET_MAX_BYTES, Dataset
+from mobilerun_functions import DATASET_MAX_BYTES, Dataset
 
 MODELS = """
-from mobilerun_routines import DATASET_MAX_BYTES, DatasetTooLargeError, key_field
+from mobilerun_functions import DATASET_MAX_BYTES, DatasetTooLargeError, key_field
 
 class In(BaseModel):
     n: int = 2
@@ -51,7 +51,7 @@ def lines(path: Path) -> list[dict]:
 
 PUSH_TWO = 'ctx.dataset.push(Item(id="a", price=1.5))\nctx.dataset.push({"id": "b", "price": 2})'
 
-# B4
+# Incomplete datasets are reported through partial results
 
 
 def test_dataset_has_only_items():
@@ -67,14 +67,14 @@ def test_incomplete_list_is_reported_with_partial(run_script):
     assert r.envelope["result"] == {"items": [{"id": "a", "price": 0.0}]}
 
 
-# D1: push to the dataset file
+# Pushed items are validated and written incrementally
 
 
 def test_push_writes_one_json_line_per_item(run_script, dataset_file):
     r = run_script(ds_script(PUSH_TWO), extra_args=["--dataset-file", str(dataset_file)])
     assert r.code == 0, r.envelope
     assert lines(dataset_file) == [{"id": "a", "price": 1.5}, {"id": "b", "price": 2.0}]
-    assert r.envelope == {
+    assert without_input(r.envelope) == {
         "ok": True,
         "outcome": "succeeded",
         "result": None,
@@ -112,11 +112,24 @@ def test_pushed_invalid_dict_does_not_leak_values(run_script, dataset_file):
     assert "SECRET" not in json.dumps(r.envelope) and "nope" not in json.dumps(r.envelope)
 
 
-def test_push_without_the_flag_is_not_available(run_script):
-    r = run_script(ds_script(PUSH_TWO))
-    assert r.code == 1
-    assert r.envelope["error"]["message"].startswith("NotAvailableError: ctx.dataset.push")
+def test_push_without_file_buffers_before_returned_items(run_script):
+    r = run_script(ds_script(PUSH_TWO + '\nreturn Dataset(items=[Item(id="c")])'))
+    assert r.code == 0
+    assert [item["id"] for item in r.envelope["result"]["items"]] == ["a", "b", "c"]
     assert "dataset" not in r.envelope
+
+
+def test_buffer_rejects_invalid_items_without_leaking_values(run_script):
+    r = run_script(ds_script('ctx.dataset.push({"id": "SECRET", "price": "not-a-price"})'))
+    assert r.code == 1 and r.envelope["error"]["code"] == "output_invalid"
+    assert "SECRET" not in json.dumps(r.envelope)
+    assert "not-a-price" not in json.dumps(r.envelope)
+
+
+def test_buffer_limit_counts_multibyte_utf8(run_script, monkeypatch):
+    monkeypatch.setattr("mobilerun_functions.dataset.DATASET_MAX_BYTES", _line_bytes(1))
+    r = run_script(ds_script('ctx.dataset.push(Item(id="é"))'))
+    assert r.code == 1 and r.envelope["error"]["code"] == "dataset_too_large"
 
 
 @pytest.mark.parametrize("ret", ["Out", None], ids=["value", "none"])
@@ -189,7 +202,7 @@ def test_unwritable_dataset_file_is_a_runner_fault(run_script, tmp_path):
     assert r.code == 64 and r.envelope is None
 
 
-# D1: size cap
+# Dataset size limits preserve previously written lines
 
 def _line_bytes(id_len: int) -> int:
     return len(json.dumps({"id": "x" * id_len, "price": 0.0}, separators=(",", ":"))) + 1
@@ -260,14 +273,14 @@ def test_a_returned_dataset_at_the_limit_fits_and_one_byte_over_fails(run_script
     assert dataset_file.read_text() == ""
 
 
-# B5: SIGTERM leaves a result
+# SIGTERM leaves a cancelled result and complete dataset lines
 
 
 def _spawn(script: Path, tmp_path: Path, *, dataset: bool) -> tuple[subprocess.Popen, Path, Path]:
     ready, result = tmp_path / "ready", tmp_path / "out.json"
     (tmp_path / "in.json").write_text(json.dumps({"ready": str(ready)}))
     argv = [
-        sys.executable, "-m", "mobilerun_routines", "run", str(script),
+        sys.executable, "-m", "mobilerun_functions", "run", str(script),
         "--input-file", str(tmp_path / "in.json"), "--result-file", str(result),
     ]  # fmt: skip
     dataset_path = tmp_path / "dataset.jsonl"
@@ -318,7 +331,8 @@ def test_sigterm_leaves_a_cancelled_envelope_and_the_pushed_lines(write_script, 
     code = _terminate(proc, ready)
     assert code == 1
     envelope = json.loads((tmp_path / "out.json").read_text())
-    assert envelope == {**CANCELLED, "dataset": {"items": 2, "bytes": dataset_path.stat().st_size}}
+    size = dataset_path.stat().st_size
+    assert without_input(envelope) == {**CANCELLED, "dataset": {"items": 2, "bytes": size}}
     assert lines(dataset_path) == [{"id": "a", "price": 0.0}, {"id": "b", "price": 2.0}]
 
 
@@ -326,14 +340,16 @@ def test_sigterm_without_a_dataset_file_has_no_dataset_counts(write_script, tmp_
     body = 'import time\nopen(input.ready, "w").close()\ntime.sleep(60)'
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
-    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED
+    envelope = json.loads((tmp_path / "out.json").read_text())
+    assert without_input(envelope) == CANCELLED
+    assert envelope["input"]["ready"].endswith("ready")  # the validated input survives
 
 
 def test_sigterm_in_a_busy_loop(write_script, tmp_path):
     body = 'open(input.ready, "w").close()\nwhile True:\n    sum(range(1000))'
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
-    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED
+    assert without_input(json.loads((tmp_path / "out.json").read_text())) == CANCELLED
 
 
 def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
@@ -343,10 +359,10 @@ def test_the_sigterm_handler_is_restored_after_an_in_process_run(run_script):
     assert signal.getsignal(signal.SIGTERM) is before
 
 
-# Fix round 1: pushed items, interrupted and concurrent appends, cancellation wins
+# Pushed aliases, safe appends, and cancellation precedence
 
 OVERLAP_MODELS = """
-from mobilerun_routines import key_field
+from mobilerun_functions import key_field
 
 class In(BaseModel):
     pass
@@ -357,7 +373,7 @@ class Item(BaseModel):
 """
 
 COMPUTED_MODELS = """
-from mobilerun_routines import key_field
+from mobilerun_functions import key_field
 from pydantic import ConfigDict, computed_field
 
 class In(BaseModel):
@@ -412,7 +428,7 @@ class _Interrupting:
 
 
 def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
-    from mobilerun_routines.dataset import DatasetFile
+    from mobilerun_functions.dataset import DatasetFile
 
     df = DatasetFile(tmp_path / "d.jsonl")
     df.append('{"id":"a"}')
@@ -432,8 +448,8 @@ def test_an_interrupted_append_leaves_only_complete_lines(tmp_path):
 def test_concurrent_appends_cannot_exceed_the_limit(tmp_path):
     import threading
 
-    from mobilerun_routines import DatasetTooLargeError
-    from mobilerun_routines.dataset import DatasetFile
+    from mobilerun_functions import DatasetTooLargeError
+    from mobilerun_functions.dataset import DatasetFile
 
     df = DatasetFile(tmp_path / "d.jsonl")
     df._fh = _Interrupting(df._fh, delay=0.2)
@@ -496,4 +512,50 @@ def test_cancellation_wins_over_what_the_script_does_afterwards(write_script, tm
     """
     proc, ready, _ = _spawn(write_script(ds_script(body, ret="Out")), tmp_path, dataset=False)
     assert _terminate(proc, ready) == 1
-    assert json.loads((tmp_path / "out.json").read_text()) == CANCELLED
+    assert without_input(json.loads((tmp_path / "out.json").read_text())) == CANCELLED
+
+
+def test_dataset_none_without_push_is_empty_in_buffer(run_script):
+    r = run_script(ds_script("return None", ret="Dataset[Item]"))
+    assert r.code == 0 and r.envelope["result"] == {"items": []}
+
+
+def test_dataset_none_without_push_is_empty_in_file(run_script, dataset_file):
+    r = run_script(ds_script("return None", ret="Dataset[Item]"),
+                   extra_args=["--dataset-file", str(dataset_file)])
+    assert r.code == 0 and r.envelope["result"] is None
+    assert lines(dataset_file) == []
+
+
+def test_returning_none_after_push_keeps_buffered_items(run_script):
+    r = run_script(ds_script(PUSH_TWO + "\nreturn None", ret="Dataset[Item]"))
+    assert r.code == 0
+    assert [item["id"] for item in r.envelope["result"]["items"]] == ["a", "b"]
+
+
+def test_returning_none_after_push_keeps_file_items(run_script, dataset_file):
+    r = run_script(ds_script(PUSH_TWO + "\nreturn None", ret="Dataset[Item]"),
+                   extra_args=["--dataset-file", str(dataset_file)])
+    assert r.code == 0 and r.envelope["result"] is None
+    assert [item["id"] for item in lines(dataset_file)] == ["a", "b"]
+
+
+@pytest.mark.parametrize("body", [
+    'ctx.dataset.push({"id": "x" * input.n})',
+    'return Dataset(items=[{"id": "x" * input.n}])',
+])
+def test_buffer_dataset_exactly_at_limit_succeeds(run_script, body):
+    id_len = DATASET_MAX_BYTES - _line_bytes(0)
+    r = run_script(ds_script(body, ret="Dataset[Item]"), {"n": id_len})
+    assert r.code == 0
+    assert r.envelope["result"] == {"items": [{"id": "x" * id_len, "price": 0.0}]}
+
+
+@pytest.mark.parametrize("body", [
+    'ctx.dataset.push({"id": "x" * input.n})',
+    'return Dataset(items=[{"id": "x" * input.n}])',
+])
+def test_buffer_dataset_one_byte_over_limit_fails(run_script, body):
+    id_len = DATASET_MAX_BYTES - _line_bytes(0) + 1
+    r = run_script(ds_script(body, ret="Dataset[Item]"), {"n": id_len})
+    assert r.code == 1 and r.envelope["error"]["code"] == "dataset_too_large"

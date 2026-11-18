@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, field_serializer, field_validator
-from mobilerun_routines import (
+from mobilerun_functions import (
     RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, Dataset, NotAvailableError, ScriptError, script,
 )
 """
@@ -25,6 +25,11 @@ class In(BaseModel):
 class Out(BaseModel):
     greeting: str
 """
+
+
+def without_input(envelope: dict) -> dict:
+    """The envelope minus the `input` the runner echoes, for tests about something else."""
+    return {key: value for key, value in envelope.items() if key != "input"}
 
 
 def script_source(

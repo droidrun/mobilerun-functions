@@ -1,8 +1,10 @@
+import json
+
 import pytest
 from pydantic import BaseModel
 
-from mobilerun_routines import Context, EntryPointError, script
-from mobilerun_routines.entry import take
+from mobilerun_functions import Context, EntryPointError, script
+from mobilerun_functions.entry import take
 
 
 class In(BaseModel):
@@ -127,3 +129,30 @@ def test_rejects_duplicate():
         @script
         def second(input: In) -> None:
             pass
+
+
+def test_list_return_error_has_dataset_hint(inspect_source):
+    code, out, _ = inspect_source("""
+        from pydantic import BaseModel
+        from mobilerun_functions import script
+        class In(BaseModel):
+            pass
+        @script
+        def main(input: In) -> list[In]:
+            return []
+    """)
+    assert code == 3
+    message = json.loads(out)["error"]["message"]
+    assert "return `Dataset[Item]`" in message
+    assert "mobilerun_user_script." not in message
+
+
+def test_public_testing_context_and_state():
+    from mobilerun_functions import RunInfo, State
+
+    ctx = Context(RunInfo(), state=State(previous={"n": 1}, previous_schema=2))
+    assert ctx.run.run_id == "local" and ctx.run.attempt == 1
+    assert ctx.run.mode == "live" and ctx.run.deadline is None and ctx.run.device_id is None
+    ctx.state.save({"n": 2})
+    assert ctx.state.previous == {"n": 1} and ctx.state.previous_schema == 2
+    assert ctx.state.saved.data == {"n": 2}

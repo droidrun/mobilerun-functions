@@ -1,4 +1,4 @@
-# mobilerun-routines
+# mobilerun-functions
 
 Python package for writing Mobilerun routine scripts. A script has one typed entry point that
 receives a validated input model and a `Context` with what the platform provides, and returns
@@ -11,18 +11,180 @@ which needs `by_name` validation from pydantic 2.11).
 ## Install
 
 ```sh
-pip install mobilerun-routines
+pip install mobilerun-functions
 ```
 
-Python 3.11, 3.12 or 3.13. For device control add the extra: `pip install "mobilerun-routines[device]"`.
+For device control add the extra: `pip install "mobilerun-functions[device]"`.
 
-## Sample script
+## Hello
+
+Create a working script and inspect its contract:
+
+```sh
+python -m mobilerun_functions new hello.py
+python -m mobilerun_functions inspect hello.py
+printf '{"name":"Ada"}\n' > in.json
+python -m mobilerun_functions run hello.py --input-file in.json --result-file out.json
+cat out.json
+# {"ok":true,"outcome":"succeeded","result":{"message":"Hello, Ada!"},"input":{"name":"Ada","greeting":"Hello"}}
+```
+
+A script is one Python file with this shape (the starter also has a `greeting` input):
+
+```python
+from pydantic import BaseModel
+from mobilerun_functions import Context, script
+
+
+class Input(BaseModel):
+    name: str = "world"  # defaults are allowed
+
+
+class Output(BaseModel):
+    message: str
+
+
+@script
+def main(input: Input, ctx: Context) -> Output:
+    ctx.log.info("greeting")  # a log line on stderr; `print(...)` works too
+    return Output(message=f"Hello, {input.name}!")
+```
+
+- **Import.** `script` and `Context` come from `mobilerun_functions`, nothing else
+  (`from mobilerun import script` does not exist).
+- **Entry point.** Mark exactly one function with the bare decorator `@script`. It may be `def`
+  or `async def`, takes `input` (a pydantic model) and, optionally, `ctx: Context`.
+- **Input.** The `Input` model is the input schema; fields with defaults are optional. `run`
+  fills the defaults in and reports the input the function received as `input` in the envelope.
+- **Return type.** One of `Output` (a pydantic model), `Output | None`, `None`, or
+  `Dataset[Item]` (see Datasets). Anything else is rejected with `entry_point_invalid`.
+  A required `Output` returning `None` fails with `output_invalid`; annotate `Output | None`
+  when `None` is intentional. Missing return annotations assume no output and produce an
+  `inspect` warning.
+- **Logging.** `ctx.log.info(...)` writes a line to stderr. `print(...)` works too: `run` leaves
+  it on stdout (the result goes to the result file), and `inspect` moves it to stderr so stdout
+  holds only its JSON document.
+- **Time limit.** The platform sets it; the script does not.
+- **Starter.** `python -m mobilerun_functions new hello.py` writes a working script in this shape.
+
+When a script is not set up this way, `inspect` reports what is wrong with a line number and a
+repair hint (see below).
+
+Helper modules next to the script are not importable: use one file per script.
+
+## Test a script
+
+The decorator returns the original function, so call it directly in a test:
+
+```python
+from hello import Input, main
+from mobilerun_functions import Context, RunInfo, State
+
+
+def test_greeting() -> None:
+    ctx = Context(RunInfo(), state=State(previous={"count": 1}, previous_schema=1))
+    output = main(Input(name="Ada"), ctx)
+    assert output.message == "Hello, Ada!"
+    ctx.state.save({"count": 2})
+    assert ctx.state.saved is not None
+    assert ctx.state.saved.data == {"count": 2}
+```
+
+Direct calls keep the function's signature for type checkers. Use `await main(...)` for async
+scripts. Direct calls do not run the CLI's input/output validation or size checks.
+
+## State between runs
+
+Pass `--state-file PATH` to enable saving. A missing file or JSON `null` means no previous
+state. The file can contain the envelope's `state` object as-is:
+`{"meta":{"schema":1},"data":{"count":1}}`. The platform's
+`{"version":7,"meta":{"schema":1},"data":{"count":1}}` format is also accepted.
+`run` reads this file; it writes the new snapshot into the result envelope, not back to the file.
+Saving without the flag raises `NotAvailableError` and tells you to pass it.
+
+Save this as `counter.py`:
+
+```python
+from pydantic import BaseModel
+from mobilerun_functions import Context, script
+
+
+class Input(BaseModel):
+    pass
+
+
+class Saved(BaseModel):
+    count: int = 0
+
+
+@script
+def main(input: Input, ctx: Context) -> Saved:
+    previous = Saved.model_validate(ctx.state.previous) if ctx.state.previous is not None else Saved()
+    current = Saved(count=previous.count + 1)
+    ctx.state.save(current, schema=1)
+    return current
+```
+
+In a fresh directory (with no `state.json`), run it twice:
+
+```sh
+printf '{}\n' > in.json
+for attempt in 1 2; do
+  python -m mobilerun_functions run counter.py --input-file in.json --result-file out.json \
+    --state-file state.json --attempt "$attempt"
+  python -c 'import json; d=json.load(open("out.json")); print(d["result"]); json.dump(d["state"],open("state.json","w"))'
+done
+# {'count': 1}
+# {'count': 2}
+```
+
+`state.previous` is a JSON value; narrow it with `Saved.model_validate(...)`, as above.
+`state.previous_schema` is the schema number used by the previous save, or `None` without one.
+Use it to migrate changed shapes. The last `save` wins; state is emitted only after success.
+
+## Datasets
+
+Return `Dataset[Item]` for a list the platform can diff between runs. Mark the field that
+identifies an item with `key_field()` (a `Field(...)` that accepts the usual arguments); exactly
+one field must carry it, and it must serialise to a string or an integer (`str`, `int`, `UUID`,
+...; not `float`, `bool` or a list). The package does not check that keys are unique.
+`Dataset` has only `items`: report an incomplete list with `ctx.partial(reason)`.
+
+A long run should not lose what it found, so `run --dataset-file PATH` creates (and truncates)
+a JSON Lines file and `ctx.dataset.push(item)` appends one validated item to it at once.
+`push` is available when the entry point returns `Dataset[Item]` (or `Dataset[Item] | None`).
+Without `--dataset-file`, validated items are buffered in memory with the same byte accounting
+(one JSON line per item). For any other return type, `push` raises `NotAvailableError`. An
+item is an `Item` or data valid for `Item`; a bad one raises `DatasetItemInvalidError`
+(`output_invalid`). A line that would take the file over 524288 bytes raises
+`DatasetTooLargeError` (`dataset_too_large`, exit 1); the lines before stay, and a script may
+catch the error and call `ctx.partial`.
+
+With `--dataset-file`, items the entry point returns are appended after the pushed ones and
+`result` is `null`; every envelope carries `"dataset": {"items": N, "bytes": B}` for the lines
+this run wrote. Without it, `result` holds `{"items": [...]}` with pushed items first,
+then returned items. Returning `None` for `Dataset[Item]` publishes the pushed items,
+including an empty dataset when nothing was pushed. This also applies to `Dataset[Item] | None`.
+Static checking accepts models and dictionaries for `push`; the precise `Item` shape is checked
+at runtime. For direct tests, pass `DatasetSink(item_type=Item)` from `mobilerun_functions.dataset`
+to `Context(..., dataset=...)`.
+
+Instead of pushing, return the items together:
+
+```python
+@script
+def main(input: Input, ctx: Context) -> Dataset[Product]:
+    return Dataset(items=[Product(sku="a", name="Apple", unit_price=1.0),
+                          Product(sku="b", name="Banana", unit_price=2.0)])
+```
+
+### Dataset example
 
 ```python
 from datetime import date
 
 from pydantic import BaseModel, Field
-from mobilerun_routines import Context, Dataset, ScriptError, key_field, script
+from mobilerun_functions import Context, Dataset, ScriptError, key_field, script
 
 
 class Input(BaseModel):
@@ -57,119 +219,27 @@ async def main(input: Input, ctx: Context) -> Dataset[Product] | None:
 `Dataset[Item]` for a list the platform can diff, call `ctx.partial("reason")` to mark a
 partial result, and use `ctx.state` to carry data to the next run.
 
-## Commands
+## Context reference
 
-```sh
-# write a starter script (fails if the file exists; the directory must exist)
-python -m mobilerun_routines new hello.py
+| Member | Behaviour |
+| --- | --- |
+| `run.run_id` / `run.attempt` | Run identifier (`"local"`) and attempt number (`1`). |
+| `run.mode` | `live` (default), `dry_run`, or `verification`; the script decides how to handle it. |
+| `run.deadline` | Optional datetime, informational; the platform enforces the deadline. |
+| `run.device_id` | Optional device identifier. |
+| `run.device_target` | `cloud` (default) or `local`. |
+| `run.device_platform` | Optional local device platform: `android` or `ios`. |
+| `run.device_url` | Optional local Portal HTTP URL. |
+| `log.info` / `log.warning` / `log.error` | One line on stderr per call. |
+| `log.status` | Replaces the file named by `MOBILERUN_FUNCTIONS_STATUS_FILE`; no-op if unset, best effort. |
+| `state.previous` / `state.previous_schema` | Prior saved JSON data and its schema number, or `None`. |
+| `state.save(data, schema=1)` | Copies a JSON value or model; requires `--state-file` in CLI runs. |
+| `dataset.push(item)` | Validates and emits an item for a dataset entry point; buffers without a file. |
+| `partial(reason)` | Marks a successful run incomplete; the last reason wins. |
+| `device()` | Connects once and returns the run's `mobilerun_core.Device`; see below. |
+| `credentials` / `files` / `llm` | Raise `NotAvailableError` in this version. |
 
-# print the entry point and the input/output JSON Schema (exit 3 if there is no valid entry point)
-python -m mobilerun_routines inspect script.py
-
-# validate input, call the entry point, write one result envelope
-python -m mobilerun_routines run script.py --input-file in.json --result-file out.json \
-    [--state-file state.json] [--dataset-file dataset.jsonl]
-```
-
-### `new`
-
-`new PATH` writes a short working script (an `Input` and an `Output` model and a `@script` entry
-point) to `PATH` and prints the path. It never overwrites: if `PATH` exists, or its directory is
-missing, it prints one line on stderr and exits 64. The starter passes `inspect` as written.
-
-### `inspect`
-
-On success it prints one JSON object on stdout and exits 0:
-`{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
-"sdkVersion"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the serialization
-name of the item field marked with `key_field()` for a `Dataset[Item]` output, else `null`.
-The script runs when it is imported; what it prints goes to stderr, so stdout holds exactly the
-JSON document (output written straight to file descriptor 1 is not intercepted).
-
-On failure it exits 3 and prints `{"ok": false, "error": {"code", "message"}}` on stdout (the
-one-line message goes to stderr as well). Codes: `no_entry_point`, `entry_point_invalid`,
-`import_failed` (the script cannot be read or raises while it is imported) and
-`schema_unsupported` (a model uses something outside the supported JSON Schema subset, or a
-`Dataset` item model does not have exactly one key field that serialises to a string or an
-integer).
-
-The schemas are limited to a subset the platform can validate. `pattern`, `prefixItems`,
-`discriminator` and recursive models are rejected, and so is any `format` outside this list:
-
-`date-time`, `date`, `uuid`, `uri`, `email`
-
-That covers `datetime`, `date`, `UUID`, `AnyUrl`/`HttpUrl` and, for `email`, a `str` field with
-`Field(json_schema_extra={"format": "email"})`. `run` still validates the input with the
-Pydantic model, so a `datetime` field receives a parsed value.
-
-### `run`
-
-Exit codes: `0` success; `1` the run failed (error envelope); `2` invalid input; `3` no valid
-entry point (no result file); `64` runner fault such as bad flags or an unreadable file (no
-result file). The envelope is
-`{"ok": true, "outcome": "succeeded" | "partial", "result": ...}` (a partial one also has
-`partialReason`; with `ctx.state.save` it has `state`) or
-`{"ok": false, "error": {"code", "message", "retryable"}}`.
-
-Result keys are the serialization names of the output model (`serialization_alias`, or `alias`),
-exactly the property names `outputSchema` lists.
-
-**Error codes.** A script raises `ScriptError(code, message, retryable=False)`. The code must
-match `^[a-z][a-z0-9_]{0,63}$` and must not be one of the codes the runner uses itself;
-otherwise the envelope code is `script_error` (message and `retryable` are kept). The check
-happens when the envelope is built.
-
-<!-- reserved-codes:start -->
-Reserved codes: `script_error` (an unexpected exception), `input_invalid` (exit 2; field paths
-and error types only), `output_invalid` (the return value or a pushed item does not match its
-model), `result_too_large`, `state_too_large`, `dataset_too_large`, `cancelled` (SIGTERM).
-<!-- reserved-codes:end -->
-
-`script_error` messages contain `str(exc)` and may include input values. The platform scrubs
-them; this package does not.
-
-**Limits.**
-
-- `error.message` and `partialReason` are cut to 500 characters (`ERROR_MESSAGE_MAX_CHARS`).
-- `result`: 524288 bytes of compact JSON (`RESULT_MAX_BYTES`).
-- `state`: 524288 bytes (`STATE_MAX_BYTES`).
-- dataset file: 524288 bytes (`DATASET_MAX_BYTES`).
-
-## Datasets
-
-Return `Dataset[Item]` for a list the platform can diff between runs. Mark the field that
-identifies an item with `key_field()` (a `Field(...)` that accepts the usual arguments); exactly
-one field must carry it, and it must serialise to a string or an integer (`str`, `int`, `UUID`,
-...; not `float`, `bool` or a list). The package does not check that keys are unique.
-`Dataset` has only `items`: report an incomplete list with `ctx.partial(reason)`.
-
-A long run should not lose what it found, so `run --dataset-file PATH` creates (and truncates)
-a JSON Lines file and `ctx.dataset.push(item)` appends one validated item to it at once.
-`push` is only available when the entry point returns `Dataset[Item]` (or `Dataset[Item] |
-None`) and the platform passed `--dataset-file`; otherwise it raises `NotAvailableError`. An
-item is an `Item` or data valid for `Item`; a bad one raises `DatasetItemInvalidError`
-(`output_invalid`). A line that would take the file over 524288 bytes raises
-`DatasetTooLargeError` (`dataset_too_large`, exit 1); the lines before stay, and a script may
-catch the error and call `ctx.partial`.
-
-With `--dataset-file`, items the entry point returns are appended after the pushed ones and
-`result` is `null`; every envelope carries `"dataset": {"items": N, "bytes": B}` for the lines
-this run wrote. Without it, `result` holds `{"items": [...]}` as before.
-
-## State and cancellation
-
-`ctx.state.previous` is the data of the last successful run and `ctx.state.previous_schema` the
-`schema` it was saved with (`None` without a previous state), so a script can migrate a changed
-shape: `ctx.state.save(data, schema=2)`.
-
-On SIGTERM, `run` stops the entry point (sync or async) and the outcome is `cancelled`, even if
-the script swallows the interruption or fails while cleaning up. It writes
-`{"ok": false, "error": {"code": "cancelled", "message": "terminated by signal", "retryable":
-false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. Lines already
-pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
-`push` is safe to call from several threads. The package has no timeout, deadline or retry logic; the platform owns those.
-
-## Control the device
+### Control the device
 
 A run started with a device gives the script `ctx.device()`. It is synchronous and returns the
 `mobilerun-core` device of the run, connected once and reused on every call:
@@ -186,9 +256,202 @@ def main(input: Input, ctx: Context) -> None:
 ```
 
 The device is the unchanged `mobilerun_core.Device`; see that package for all its methods. It is
-an optional dependency: install `mobilerun-routines[device]`. A run without a device, without
+an optional dependency: install `mobilerun-functions[device]`. A run without a device, without
 `mobilerun-core`, or without the platform's environment raises `NotAvailableError`; scripts
-never build a client or read the environment. The platform handles the credentials.
+never build a client or read the environment. The platform handles the credentials and sets the
+API base URL in `MOBILERUN_BASE_URL`; the older `MOBILERUN_API_BASE_URL` is still read when the
+new name is unset or empty.
 
-`credentials`, `files` and `llm` on `Context` raise `NotAvailableError` in this version.
-Develop with `uv sync && uv run ruff check && uv run pytest`.
+### Run against a local device
+
+To test a script against your own emulator or phone, install the extra
+(`pip install "mobilerun-functions[local]"`) and pass the device to `run`:
+
+- `--device-target local|cloud`: where the device lives (default `cloud`, which is the platform's
+  behaviour and needs no flag).
+- `--device-platform android|ios`: the platform of a device reached by URL.
+- `--device-url URL`: the Portal HTTP URL of the device.
+
+```sh
+# Android over ADB: the device id is the serial from `adb devices`
+python -m mobilerun_functions run script.py --input-file in.json --result-file out.json \
+  --device-id emulator-5554 --device-target local
+
+# iOS through its Portal URL
+python -m mobilerun_functions run script.py --input-file in.json --result-file out.json \
+  --device-target local --device-platform ios --device-url http://192.168.1.20:6643
+```
+
+`--device-platform` defaults to `android`; with `--device-url` it uses the Android Portal over HTTP,
+without it ADB. `ios` always uses the iOS Portal. A local run never opens a cloud device.
+
+Portal tokens and URLs are read by `mobilerun-core` from its own environment variables
+(`MOBILERUN_ANDROID_PORTAL_TOKEN`, `MOBILERUN_IOS_PORTAL_TOKEN`, …); this package never reads or
+passes them. The Android Portal needs a token; the iOS one may run without it. A missing serial,
+URL or required token raises `NotAvailableError`.
+
+## Commands reference
+
+```sh
+# write a starter script (fails if the file exists; the directory must exist)
+python -m mobilerun_functions new hello.py
+
+# print the entry point and the input/output JSON Schema (exit 3 if there is no valid entry point)
+python -m mobilerun_functions inspect script.py
+
+# validate input, call the entry point, write one result envelope
+python -m mobilerun_functions run script.py --input-file in.json --result-file out.json \
+    [--state-file state.json] [--dataset-file dataset.jsonl]
+```
+
+### `new`
+
+`new PATH` writes a short working script (an `Input` and an `Output` model and a `@script` entry
+point) to `PATH` and prints the path. It never overwrites: if `PATH` exists, or its directory is
+missing, it prints one line on stderr and exits 64. The starter passes `inspect` as written.
+
+### `inspect`
+
+On success it prints one JSON object on stdout and exits 0:
+`{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
+"sdkVersion", "warnings"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the
+serialization name of the item field marked with `key_field()` for a `Dataset[Item]` output, else
+`null`. `warnings` is a list of issues (see below). A missing return annotation adds
+`return_annotation_missing`: no output is assumed. Annotate the function to make its intent clear.
+For datasets, item fields live at `outputSchema.properties.items.items.properties`.
+The script runs when it is imported; what it prints goes to stderr, so stdout holds exactly the
+JSON document (output written straight to file descriptor 1 is not intercepted).
+
+**What `inspect` reports.** A script that imports and has a valid entry point is accepted; a
+script that does not compile is a `syntax_error`. When the import or the entry point fails,
+`inspect` also reads the source as Python syntax (it does not run any code) to explain the usual
+newcomer mistakes more precisely, with line numbers and every finding at once. Each issue has a
+code:
+
+<!-- inspect-codes:start -->
+- `syntax_error`: the file does not compile; the issue has the line.
+- `import_wrong_module`: `script` (or `Context` from a `mobilerun*` module) is imported from a
+  module other than `mobilerun_functions`, for example `from mobilerun import script`.
+- `import_missing`: a function is decorated with `@script` but `script` is not imported from
+  `mobilerun_functions`.
+- `no_entry_point`: no function is marked with `@script`.
+- `entry_point_invalid`: two functions are marked with `@script`, or the signature does not fit;
+  unresolved annotations such as a missing `Context` import get the repair hint.
+- `import_failed`: the script cannot be read or raises while it is imported. A `NameError` for
+  `script` or `Context`, or a missing `mobilerun`, `mobilerun_sandbox` or `mobilerun_sdk` module,
+  gets the same repair hint as the static checks.
+- `schema_unsupported`: a model uses something outside the supported JSON Schema subset, or a
+  `Dataset` item model does not have exactly one key field that serialises to a string or an
+  integer.
+<!-- inspect-codes:end -->
+
+**Failure.** `inspect` exits 3 and prints one JSON document on stdout:
+
+```json
+{"ok": false,
+ "error": {"code": "import_missing", "message": "...", "line": 9,
+           "repair": {"action": "fix_script", "hint": "Add `from mobilerun_functions import ..."}},
+ "errors": ["... every issue, in line order, the first one equal to `error` ..."],
+ "warnings": []}
+```
+
+An issue is `{"code", "message", "line"?, "repair"?}`. `line` is set when the problem has a
+place in the script; `repair` is `{"action": "fix_script", "hint"}`, where the hint names the
+correct import and a one-line example. `error` is always the first entry of `errors`, so callers
+that only read `error.code` and `error.message` keep working. stderr gets one line per error:
+`line N: message — hint`.
+
+The schemas are limited to a subset the platform can validate. `pattern`, `patternProperties`,
+`prefixItems`, `discriminator` and recursive models are rejected, and so is any `format` outside this list:
+
+`date-time`, `date`, `uuid`, `uri`, `email`
+
+That covers `datetime`, `date`, `UUID`, `AnyUrl`/`HttpUrl` and, for `email`, a `str` field with
+`Field(json_schema_extra={"format": "email"})`. `run` still validates the input with the
+Pydantic model, so a `datetime` field receives a parsed value.
+
+### `run`
+
+`run PATH --input-file PATH --result-file PATH` validates the same contract as `inspect`
+before reading input. Contract violations exit 3, write nothing to stdout and
+print one line per issue on stderr in the same format as `inspect`, and write no result file.
+
+An exception raised while importing the script instead makes `run` write an error envelope
+and exit 1 (`script_error` for an unexpected exception). `inspect` reports the same unexpected
+exception as `import_failed` and exits 3.
+
+| Flag | Meaning / default |
+| --- | --- |
+| `--input-file` | Required input JSON file. |
+| `--result-file` | Required envelope output path (written atomically). |
+| `--state-file` | Prior state file, may not exist on the first run. |
+| `--dataset-file` | Incremental JSON Lines output (truncated at start). |
+| `--run-id` | Run identifier; `local`. |
+| `--attempt` | Attempt number; `1`. |
+| `--mode` | `live`, `dry_run`, `verification`; `live`. |
+| `--deadline` | ISO datetime, informational; absent by default. |
+| `--device-id` | Cloud UUID or local ADB serial. |
+| `--device-target` | `cloud` (default) or `local`. |
+| `--device-platform` | Local `android` (default) or `ios`; only with local target. |
+| `--device-url` | Local Portal HTTP URL; only with local target. |
+
+Every failed run with exit 1 or 2 writes one summary line `error CODE: MESSAGE` to stderr,
+including field paths and error types for validation failures. The result file remains the
+machine-readable source of the full envelope.
+
+## Platform contract
+
+Exit codes: `0` success; `1` the run failed (error envelope); `2` invalid input; `3` no valid
+entry point (no result file); `64` runner fault such as bad flags or an unreadable file (no
+result file). The envelope is
+`{"ok": true, "outcome": "succeeded" | "partial", "result": ...}` (a partial one also has
+`partialReason`; with `ctx.state.save` it has `state`) or
+`{"ok": false, "error": {"code", "message", "retryable", "details"?}}`.
+Validation `error.details` lists field paths and error types
+only (`{"path": "items.0.name", "message": "string_type"}`), never input values.
+
+Both envelopes also carry `"input"`: the input the entry point received, after validation and
+defaults (`model_dump(mode="json", by_alias=True)` of the `Input` model, so a field left out of
+the input file shows its default, and keys are the names `inputSchema` lists). It is there
+whenever the input validated: also for a failed or cancelled run, never for `input_invalid` and
+never when there is no result file. It can contain the values the platform passed in.
+`input` is omitted when it is larger than 64 KiB or not representable as JSON; the run itself is
+not affected.
+
+Result keys are the serialization names of the output model (`serialization_alias`, or `alias`),
+exactly the property names `outputSchema` lists.
+
+**Error codes.** A script raises `ScriptError(code, message, retryable=False)`. The code must
+match `^[a-z][a-z0-9_]{0,63}$` and must not be one of the codes the runner uses itself;
+otherwise the envelope code is `script_error` (message and `retryable` are kept). The check
+happens when the envelope is built and writes a warning to stderr for an invalid or reserved code.
+
+<!-- reserved-codes:start -->
+Reserved codes: `script_error` (an unexpected exception), `input_invalid` (exit 2; field paths
+and error types only), `output_invalid` (the return value or a pushed item does not match its
+model), `result_too_large`, `state_too_large`, `dataset_too_large`, `cancelled` (SIGTERM).
+<!-- reserved-codes:end -->
+
+`script_error` messages contain `str(exc)` and may include input values. The platform scrubs
+them; this package does not.
+
+**Limits.**
+
+- `error.message` and `partialReason` are cut to 500 characters (`ERROR_MESSAGE_MAX_CHARS`).
+- `result` for value outputs: 524288 bytes of compact JSON (`RESULT_MAX_BYTES`).
+- `state`: 524288 bytes (`STATE_MAX_BYTES`).
+- dataset (buffer or file): 524288 bytes (`DATASET_MAX_BYTES`).
+
+### Cancellation
+
+On SIGTERM, `run` stops the entry point (sync or async) and the outcome is `cancelled`, even if
+the script swallows the interruption or fails while cleaning up. It writes
+`{"ok": false, "error": {"code": "cancelled", "message": "terminated by signal", "retryable":
+false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. Lines already
+pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
+`push` is safe to call from several threads. The deadline is informational; the platform
+enforces it. The package has no timeout or retry logic.
+
+## Development
+
+Develop with `uv sync --frozen && uv run ruff check && uv run pytest`.
