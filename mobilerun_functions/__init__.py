@@ -13,7 +13,13 @@ from .errors import (
     NotAvailableError,
     ScriptError,
 )
-from .results import ExecutionResult, ExpectationResult, ExpectationVerdict
+from .results import (
+    ExecutionResult,
+    ExpectationFailed,
+    ExpectationInconclusive,
+    ExpectationResult,
+    ExpectationVerdict,
+)
 from .schema import ALLOWED_FORMATS
 
 __all__ = [
@@ -31,6 +37,8 @@ __all__ = [
     "Proxy",
     "UIState",
     "ExecutionResult",
+    "ExpectationFailed",
+    "ExpectationInconclusive",
     "ExpectationResult",
     "ExpectationVerdict",
     "binding",

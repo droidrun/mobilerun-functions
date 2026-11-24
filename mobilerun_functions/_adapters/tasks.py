@@ -10,7 +10,7 @@ from pydantic import BaseModel, ValidationError
 from ..results import ExecutionResult
 
 T = TypeVar("T", bound=BaseModel)
-TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+TASK_START_TIMEOUT = 30.0
 TASK_TIMEOUT = 1800.0
 POLL_INTERVAL = 2.0
 
@@ -33,19 +33,17 @@ class Tasks:
             params["output_schema"] = output.model_json_schema()
         if max_steps is not None:
             params["max_steps"] = max_steps
-        task_id = None
+        response = await self._client.tasks.run(**params, timeout=TASK_START_TIMEOUT)
+        task_id = response.id
         try:
             async with asyncio.timeout(TASK_TIMEOUT if timeout is None else timeout):
-                response = await self._client.tasks.run(**params)
-                task_id = response.id
                 while True:
                     state = await self._client.tasks.get_status(task_id)
-                    if state.status in TERMINAL_STATUSES:
+                    if state.terminal:
                         return self._result(state, task_id, output)
                     await asyncio.sleep(POLL_INTERVAL)
         except BaseException:
-            if task_id is not None:
-                await self._stop(task_id)
+            await self._stop(task_id)
             raise
 
     async def _stop(self, task_id: str) -> None:

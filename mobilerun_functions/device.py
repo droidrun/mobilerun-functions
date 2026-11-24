@@ -39,11 +39,12 @@ def connect_device(
     target: DeviceTarget = "cloud",
     platform: DevicePlatform | None = None,
     url: str | None = None,
+    connection: tuple[str | None, str | None] | None = None,
 ) -> Device:
     """Connect to the run's device and return the `mobilerun_core` device unchanged."""
     if target == "local":
         return _connect_local(device_id, platform, url)
-    return _connect_cloud(device_id)
+    return _connect_cloud(device_id, connection=connection)
 
 
 def _local_backend(platform: str | None, url: str | None) -> str:

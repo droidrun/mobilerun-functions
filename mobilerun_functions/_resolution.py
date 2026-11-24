@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -14,8 +15,8 @@ from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import Tasks
 from ._connection import Connection
 from .bindings import Credentials, Mailbox, Operator, Proxy
-from .context import Context
-from .device import _connect_cloud, _connect_local
+from .context import Context, DeviceTarget, RunInfo
+from .device import connect_device
 from .entry import EntryPoint
 from .errors import NotAvailableError
 
@@ -31,10 +32,9 @@ async def call_bound(
 ) -> Any:
     async with AsyncExitStack() as stack:
         await _resolve(entry, model_input, ctx, connection, credentials_file, stack)
-        result = entry.func(model_input, ctx)
         if entry.is_async:
-            return await result
-        return result
+            return await entry.func(model_input, ctx)
+        return await asyncio.to_thread(entry.func, model_input, ctx)
 
 
 async def _resolve(
@@ -49,12 +49,18 @@ async def _resolve(
     local_tasks = Operator in interfaces and not connection.cloud
     if local_tasks:
         raise NotAvailableError("tasks", LOCAL_TASKS_REASON)
+    local_proxy = Proxy in interfaces and not _cloud_device(ctx.run, connection)
+    if local_proxy:
+        raise NotAvailableError(
+            "proxy", "needs a cloud device (use --cloud or --device-target cloud)"
+        )
     client: Any = None
     device = None
     credentials = None
     packages = {item.options.package for item in entry.bindings if item.interface is Credentials}
     for item in entry.bindings:
-        member = item.interface.__name__.lower()
+        member = item.name
+        reading_credentials = item.interface is Credentials and credentials is None
         try:
             remote_resource = item.interface in (Mailbox, Proxy, Operator)
             remote_credentials = item.interface is Credentials and connection.cloud
@@ -97,23 +103,36 @@ async def _resolve(
                 device = DeviceAdapter(core)
                 value = device
             setattr(ctx, item.name, value)
-        except NotAvailableError:
-            raise
-        except Exception:
-            raise NotAvailableError(member, "binding could not be resolved") from None
+        except NotAvailableError as exc:
+            reason = str(exc).removeprefix(f"ctx.{exc.member} ")
+            raise NotAvailableError(member, reason) from None
+        except ImportError:
+            raise NotAvailableError(member, "install mobilerun-functions[device]") from None
+        except Exception as exc:
+            raise NotAvailableError(member, _resolution_reason(exc, reading_credentials)) from None
     if Operator in interfaces:
         assert device is not None
         assert ctx.run.device_id is not None
         device._tasks = Tasks(client, ctx.run.device_id)
 
 
+def _cloud_device(run: RunInfo, connection: Connection) -> bool:
+    return connection.cloud or run.device_target == "cloud"
+
+
 async def _device(ctx: Context, connection: Connection) -> Any:
     run = ctx.run
-    cloud_device = connection.cloud or run.device_target == "cloud"
-    if cloud_device:
-        return await asyncio.to_thread(
-            _connect_cloud, run.device_id, connection=(connection.base_url, connection.api_key)
-        )
+    target: DeviceTarget = "cloud" if _cloud_device(run, connection) else "local"
     return await asyncio.to_thread(
-        _connect_local, run.device_id, run.device_platform, run.device_url
+        connect_device, run.device_id, target=target, platform=run.device_platform,
+        url=run.device_url, connection=(connection.base_url, connection.api_key),
     )
+
+
+def _resolution_reason(exc: Exception, reading_credentials: bool) -> str:
+    status_error = getattr(sys.modules.get("mobilerun_sdk"), "APIStatusError", ())
+    if isinstance(exc, status_error):
+        return f"API returned {getattr(exc, 'status_code', None)}"
+    if reading_credentials:
+        return "binding could not be resolved"
+    return type(exc).__name__

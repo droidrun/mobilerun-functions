@@ -11,9 +11,11 @@ from pydantic.json_schema import JsonSchemaMode
 from .dataset import KEY_MARKER
 
 REJECTED_KEYWORDS = ("pattern", "patternProperties", "prefixItems", "discriminator")
-# The `format` values the platform validates (with `ajv-formats`).
+MAILBOX_FORMAT = "mobilerun-mailbox"
+PROXY_FORMAT = "mobilerun-proxy"
+# Supported scalar formats and resource identifiers.
 ALLOWED_FORMATS = (
-    "date-time", "date", "uuid", "uri", "email", "mobilerun-mailbox", "mobilerun-proxy"
+    "date-time", "date", "uuid", "uri", "email", MAILBOX_FORMAT, PROXY_FORMAT
 )
 # Keywords whose value is a map of name -> schema.
 _SCHEMA_MAPS = ("properties", "dependentSchemas")

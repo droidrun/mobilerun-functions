@@ -135,3 +135,30 @@ def test_local_operator_fails_before_main(run_script):
         "NotAvailableError: ctx.tasks needs the framework agent add-on or --cloud"
     )
     assert result.out == ""
+
+
+def test_sync_empty_context_can_run_its_own_event_loop(run_script):
+    script = source(
+        "pass", 'print(asyncio.run(asyncio.sleep(0, result="ok")))',
+        before="\nimport asyncio\n",
+    ).replace("async def main", "def main")
+    result = run_script(script)
+    assert result.code == 0, result.err
+    assert result.out == "ok\n"
+
+
+@pytest.mark.parametrize("name", [
+    "run", "log", "state", "dataset", "partial", "partial_reason", "files", "llm",
+    "_private", "_device", "__dict__",
+])
+def test_reserved_context_binding_names_are_rejected(inspect_source, run_script, name):
+    script = source(f"{name}: Device")
+    code, out, err = inspect_source(script)
+    assert code == 3
+    assert json.loads(out)["error"]["message"] == (
+        f"{name}: reserved Context member; choose another name"
+    )
+    assert len(err.splitlines()) == 1
+    result = run_script(script)
+    assert result.code == 3 and result.envelope is None
+    assert result.err == err

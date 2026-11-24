@@ -12,7 +12,7 @@ import httpx
 import pytest
 from mobilerun_sdk import AsyncMobilerun as SDKClient
 from test_bindings import source
-from test_device import FakeCore
+from test_device import FakeCore, focused_device
 
 
 @pytest.fixture
@@ -92,7 +92,7 @@ def test_cloud_credential_typing_never_returns_a_secret(sdk, core, run_script):
     responses, requests = sdk
     responses.append((200, credentials_page([credential()])))
     typed = []
-    core.device.type = lambda text, **kw: typed.append(text)
+    core.device = focused_device(type=lambda text, **kw: typed.append(text))
     result = run_script(source(
         'device: Device\nvault: Credentials = binding(package="com.example")',
         'print(await ctx.vault.type_field(ctx.device, None, "password"))',
@@ -134,7 +134,7 @@ def test_local_mailbox_without_key_fails_before_main(sdk, monkeypatch, run_scrip
     result = run_script(source('email: Mailbox = binding(input="mailbox_id")', 'print("MAIN")'))
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
-        "NotAvailableError: ctx.mailbox set MOBILERUN_API_KEY"
+        "NotAvailableError: ctx.email set MOBILERUN_API_KEY"
     )
     assert result.out == ""
     assert requests == []
@@ -198,15 +198,12 @@ def test_tasks_run_and_poll_structured_output(sdk, core, run_script):
     assert body["outputSchema"]["properties"]["answer"]["type"] == "string"
 
 
-@pytest.mark.parametrize("status,succeeded,passed", [
-    ("completed", True, True), ("failed", False, False), ("cancelled", False, False),
-])
-def test_expect_maps_terminal_task_and_verdict(sdk, core, run_script, status, succeeded, passed):
+def test_expect_returns_only_a_passing_verdict(sdk, core, run_script):
     responses, requests = sdk
     responses.extend([
         (200, {"id": "task-1"}),
         (200, {
-            "status": status, "terminal": True, "succeeded": succeeded,
+            "status": "completed", "terminal": True, "succeeded": True,
             "message": "done", "output": {"passed": True, "reason": "screen matches"},
         }),
     ])
@@ -216,10 +213,15 @@ def test_expect_maps_terminal_task_and_verdict(sdk, core, run_script, status, su
     ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
     verdict = json.loads(result.out)
-    assert verdict["passed"] is passed
+    assert verdict["passed"] is True
     assert verdict["condition"] == "screen ready" and verdict["reason"] == "screen matches"
-    assert verdict["task"]["success"] is succeeded
-    assert json.loads(requests[0].content)["outputSchema"]["required"] == ["passed", "reason"]
+    assert verdict["task"]["success"] is True
+    body = json.loads(requests[0].content)
+    assert body["task"] == (
+        "Check, without changing anything on the device, whether: screen ready. "
+        "Report passed=true only if it is clearly true."
+    )
+    assert body["outputSchema"]["required"] == ["passed", "reason"]
 
 
 def test_invalid_task_output_marks_execution_failed(sdk, core, run_script):
@@ -233,13 +235,13 @@ def test_invalid_task_output_marks_execution_failed(sdk, core, run_script):
     ])
     result = run_script(source(
         'device: Device\noperator: Operator',
-        'print((await ctx.device.expect("ready")).model_dump_json())',
+        'print((await ctx.device.do("ready", output=ExpectationVerdict)).model_dump_json())',
+        before="\nfrom mobilerun_functions import ExpectationVerdict\n",
     ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
-    verdict = json.loads(result.out)
-    assert verdict["passed"] is False and verdict["task"]["success"] is False
-    assert verdict["task"]["output"] is None
-    assert verdict["reason"] == "task output does not match the output schema"
+    execution = json.loads(result.out)
+    assert execution["success"] is False and execution["output"] is None
+    assert execution["answer"] == "task output does not match the output schema"
 
 
 def test_task_deadline_interrupts_polling_and_stops_existing_task():
@@ -321,3 +323,168 @@ def test_task_polls_through_running_until_terminal(sdk, core, monkeypatch, run_s
         "/v1/tasks", "/v1/tasks/task-1/status", "/v1/tasks/task-1/status",
     ]
     pause.assert_awaited_once_with(2.0)
+
+
+@pytest.mark.parametrize("status", [401, 404])
+def test_binding_api_status_error_names_field_without_body(sdk, run_script, status):
+    responses, requests = sdk
+    responses.append((status, {"detail": "vault-secret"}))
+    result = run_script(source('inbox: Mailbox = binding(input="mailbox_id")', 'print("MAIN")'))
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        f"NotAvailableError: ctx.inbox API returned {status}"
+    )
+    assert result.out == ""
+    assert len(requests) == 1
+    assert "vault-secret" not in result.err + json.dumps(result.envelope)
+
+
+def test_missing_sdk_names_binding_and_install_extra(sdk, monkeypatch, run_script):
+    _, requests = sdk
+    monkeypatch.setitem(sys.modules, "mobilerun_sdk", None)
+    result = run_script(source('inbox: Mailbox = binding(input="mailbox_id")'))
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.inbox install mobilerun-functions[device]"
+    )
+    assert requests == []
+
+
+def test_local_proxy_fails_before_building_any_client(sdk, monkeypatch, run_script):
+    _, requests = sdk
+    built = []
+    monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: built.append(kw))
+    result = run_script(source(
+        'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")',
+        'print("MAIN")',
+    ), extra_args=["--device-target", "local", "--device-id", "emulator-5554"])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.proxy needs a cloud device (use --cloud or --device-target cloud)"
+    )
+    assert built == [] and requests == []
+    assert result.out == ""
+
+
+def test_local_mailbox_defaults_to_public_api(sdk, monkeypatch, run_script):
+    responses, requests = sdk
+    monkeypatch.delenv("MOBILERUN_BASE_URL")
+    responses.append((200, {"data": {"address": None}}))
+    result = run_script(source('email: Mailbox = binding(input="mailbox_id")'))
+    assert result.code == 0, result.err
+    assert str(requests[0].url) == "https://api.mobilerun.ai/v1/mailboxes/mailbox-1"
+
+
+def test_expect_false_raises_failed_with_framework_attributes(sdk, core, run_script):
+    responses, _ = sdk
+    responses.extend([
+        (200, {"id": "task-1"}),
+        (200, {
+            "status": "completed", "terminal": True, "succeeded": True,
+            "output": {"passed": False, "reason": "screen differs"},
+        }),
+    ])
+    result = run_script(source("device: Device\noperator: Operator", '''
+try:
+    await ctx.device.expect("screen ready")
+except ExpectationFailed as exc:
+    print(exc.condition, exc.reason, str(exc))
+    print(exc.result.model_dump_json())
+'''.strip().replace("\n", "\n    "),
+        before="\nfrom mobilerun_functions import ExpectationFailed\n",
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    fields, payload = result.out.splitlines()
+    assert fields == "screen ready screen differs screen differs"
+    verdict = json.loads(payload)
+    assert verdict["passed"] is False
+    assert verdict["condition"] == "screen ready" and verdict["reason"] == "screen differs"
+    assert verdict["task"]["success"] is True
+
+
+def test_expect_failed_task_raises_inconclusive_with_framework_attributes(sdk, core, run_script):
+    responses, _ = sdk
+    responses.extend([
+        (200, {"id": "task-1"}),
+        (200, {
+            "status": "failed", "terminal": True, "succeeded": False,
+            "output": {"passed": True, "reason": "unreliable"},
+        }),
+    ])
+    result = run_script(source("device: Device\noperator: Operator", '''
+try:
+    await ctx.device.expect("screen ready")
+except ExpectationInconclusive as exc:
+    print(exc.condition, str(exc))
+    print(exc.task.model_dump_json())
+'''.strip().replace("\n", "\n    "),
+        before="\nfrom mobilerun_functions import ExpectationInconclusive\n",
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    message, payload = result.out.splitlines()
+    assert message == (
+        "screen ready Could not determine whether the expectation holds: no structured verdict"
+    )
+    task = json.loads(payload)
+    assert task["success"] is False and task["task_id"] == "task-1"
+    assert task["output"] == {"passed": True, "reason": "unreliable"}
+
+
+def test_expect_missing_verdict_raises_inconclusive(sdk, core, run_script):
+    responses, _ = sdk
+    responses.extend([
+        (200, {"id": "task-1"}),
+        (200, {"status": "completed", "terminal": True, "succeeded": True, "output": None}),
+    ])
+    result = run_script(source("device: Device\noperator: Operator", '''
+try:
+    await ctx.device.expect("screen ready")
+except ExpectationInconclusive as exc:
+    print(exc.condition, exc.task.output)
+'''.strip().replace("\n", "\n    "),
+        before="\nfrom mobilerun_functions import ExpectationInconclusive\n",
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    assert result.out == "screen ready None\n"
+
+
+def test_task_deadline_starts_after_creation_returns():
+    from mobilerun_functions._adapters.tasks import Tasks
+
+    creation_options = []
+
+    async def exercise():
+        created = asyncio.Event()
+        asyncio.get_running_loop().call_later(0.02, created.set)
+
+        async def run(**kwargs):
+            creation_options.append(kwargs)
+            await created.wait()
+            return types.SimpleNamespace(id="task-1")
+
+        async def status(task_id):
+            return types.SimpleNamespace(
+                terminal=True, succeeded=True, message="done", output=None, steps=1,
+            )
+
+        client = types.SimpleNamespace(tasks=types.SimpleNamespace(run=run, get_status=status))
+        return await Tasks(client, "dev-1").run("read screen", timeout=0.001)
+
+    result = asyncio.run(exercise())
+    assert result.success is True and result.task_id == "task-1"
+    assert creation_options == [{"device_id": "dev-1", "task": "read screen", "timeout": 30.0}]
+
+
+def test_credential_read_failure_remains_opaque_and_names_binding(sdk, run_script):
+    responses, _ = sdk
+    payload = credential()
+    payload["fields"] = None
+    payload["sensitive"] = "vault-secret"
+    responses.append((200, credentials_page([payload])))
+    result = run_script(source('vault: Credentials = binding(package="com.example")'),
+                        extra_args=["--cloud"])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.vault binding could not be resolved"
+    )
+    assert "vault-secret" not in result.err + json.dumps(result.envelope)

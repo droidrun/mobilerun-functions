@@ -285,13 +285,13 @@ name = "mobilerun-functions"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
-    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
 device = [
     { name = "mobilerun-core" },
     { name = "mobilerun-sdk" },
+    { name = "pyyaml" },
 ]
 local = [
     { name = "mobilerun-core", extra = ["local"] },
@@ -301,6 +301,7 @@ local = [
 dev = [
     { name = "mobilerun-sdk" },
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
@@ -311,7 +312,7 @@ requires-dist = [
     { name = "mobilerun-core", extras = ["local"], marker = "extra == 'local'", specifier = ">=1.12.0,<2" },
     { name = "mobilerun-sdk", marker = "extra == 'device'", specifier = ">=6.3.1,<7" },
     { name = "pydantic", specifier = ">=2.11" },
-    { name = "pyyaml", specifier = ">=6" },
+    { name = "pyyaml", marker = "extra == 'device'", specifier = ">=6" },
 ]
 provides-extras = ["device", "local"]
 
@@ -319,6 +320,7 @@ provides-extras = ["device", "local"]
 dev = [
     { name = "mobilerun-sdk", specifier = ">=6.3.1,<7" },
     { name = "pytest" },
+    { name = "pyyaml", specifier = ">=6" },
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]

@@ -22,13 +22,18 @@ class Connection:
     def capture(cls, force_cloud: bool) -> Connection:
         cloud = force_cloud or os.environ.get(PLATFORM_ENV) == "cloud"
         base_url, api_key = _cloud_connection()
-        if force_cloud and not base_url:
+        use_default_base = force_cloud and not base_url
+        if use_default_base:
             base_url = CLOUD_BASE_URL
         return cls(cloud=cloud, base_url=base_url, api_key=api_key)
 
     def require_cloud(self, member: str) -> tuple[str, str]:
         if not self.api_key:
             raise NotAvailableError(member, f"set {API_KEY_ENV}")
-        if not self.base_url:
+        base_url = self.base_url
+        local_resource = not self.cloud and not base_url
+        if local_resource:
+            base_url = CLOUD_BASE_URL
+        if not base_url:
             raise NotAvailableError(member, f"set {API_BASE_URL_ENV}")
-        return self.base_url, self.api_key
+        return base_url, self.api_key

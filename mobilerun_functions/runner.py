@@ -241,7 +241,7 @@ def _call(
     entry: EntryPoint, model_input: BaseModel, ctx: Context,
     connection: Connection, credentials_file: str | None,
 ) -> Any:
-    if entry.context_model is not Context:
+    if entry.bindings:
         return asyncio.run(call_bound(entry, model_input, ctx, connection, credentials_file))
     args = (model_input, ctx) if entry.takes_ctx else (model_input,)
     result = entry.func(*args)

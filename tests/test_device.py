@@ -44,6 +44,12 @@ class FakeCore:
         self.module.Mobilerun = Mobilerun  # type: ignore[attr-defined]
 
 
+def focused_device(**methods):
+    raw = {"phone_state": {"focusedElement": {"text": ""}, "isEditable": True}}
+    ui = types.SimpleNamespace(nodes=[], get=raw.get)
+    return types.SimpleNamespace(ui=lambda: ui, screen_size=lambda: (1080, 1920), **methods)
+
+
 @pytest.fixture
 def fake_core(monkeypatch: pytest.MonkeyPatch) -> FakeCore:
     core = FakeCore()
@@ -282,11 +288,15 @@ def test_local_only_flags_need_local_target(
     assert fake_core.connects == []
 
 
-def test_legacy_device_warns_once_per_context(fake_core):
+def test_legacy_device_warns_once_per_context(fake_core, capsys):
     ctx = make_ctx()
     with pytest.warns(DeprecationWarning, match=r"class Ctx\(Context\)") as caught:
         assert ctx.device() is ctx.device() is fake_core.device
     assert len(caught) == 1
+    assert capsys.readouterr().err == (
+        "[WARNING] ctx.device() is deprecated; declare class Ctx(Context): device: Device "
+        "and use await ctx.device.tap(...) instead\n"
+    )
 
 
 @pytest.mark.parametrize("environment,cloud_flags", [("cloud", []), ("local", ["--cloud"])])
@@ -323,7 +333,7 @@ def test_binding_local_flags_and_file_credentials(fake_core, fake_local, tmp_pat
     path.write_text('com.example:\n  work:\n    password: "file-secret-value"\n')
     path.chmod(0o600)
     typed = []
-    fake_core.device = types.SimpleNamespace(type=lambda text, **kw: typed.append((text, kw)))
+    fake_core.device = focused_device(type=lambda text, **kw: typed.append((text, kw)))
     script = source(
         'device: Device\ncredentials: Credentials = binding(package="com.example")',
         'await ctx.credentials.type_field(ctx.device, None, "password", name="work")',
@@ -373,7 +383,7 @@ def test_shared_credentials_file_fails_before_main(tmp_path, run_script, mode):
     ), extra_args=["--credentials-file", str(path)])
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
-        "NotAvailableError: ctx.credentials credentials file must have mode 600"
+        "NotAvailableError: ctx.vault credentials file must have mode 600"
     )
     assert result.out == ""
     assert "file-secret-value" not in result.err + json.dumps(result.envelope)
@@ -391,7 +401,7 @@ def test_credential_driver_failure_does_not_leak_the_value(
     def reject(text, **kwargs):
         raise ValueError(text)
 
-    fake_core.device = types.SimpleNamespace(type=reject)
+    fake_core.device = focused_device(type=reject)
     result = run_script(source(
         'device: Device\nvault: Credentials = binding(package="com.example")',
         'await ctx.vault.type_field(ctx.device, None, "password")',
@@ -449,7 +459,9 @@ print(state.elements, state.formatted_text, state.focused_text, state.phone_stat
     ("swipe(1, 2, 3, 4, duration_ms=750)", "swipe", (1, 2, 3, 4), {"ms": 750}, None),
     ("drag(1, 2, 3, 4, duration=2.5)", "swipe", (1, 2, 3, 4), {"ms": 2500}, None),
     ("input_text('hello', clear=True, stealth=True, wpm=30)", "type", ("hello",),
-     {"clear": True, "humanize": False, "wpm": 30}, True),
+     {"clear": True, "humanize": True, "wpm": 30}, True),
+    ("input_text('hello')", "type", ("hello",),
+     {"clear": False, "humanize": False, "wpm": None}, True),
     ("press_button('home')", "key", ("home",), {}, None),
     ("press_key_code(4)", "key", (4,), {}, None),
     ("start_app('com.example', activity='Main')", "start_app", ("com.example",),
@@ -496,3 +508,71 @@ def test_binding_screenshot_reads_cloud_file_bytes(fake_core, tmp_path, run_scri
                         extra_args=["--device-id", "dev-1"])
     assert result.code == 0, result.err
     assert result.out == "b'png'\n"
+    assert not screenshot.exists()
+
+
+def test_sync_bound_context_can_run_its_own_event_loop(tmp_path, run_script):
+    from test_bindings import source
+
+    path = tmp_path / "credentials.yaml"
+    path.write_text('work: "file-secret-value"\n')
+    path.chmod(0o600)
+    script = source(
+        'vault: Credentials = binding(package="com.example")',
+        'print(asyncio.run(ctx.vault.list()))',
+        before="\nimport asyncio\n",
+    ).replace("async def main", "def main")
+    result = run_script(script, extra_args=["--credentials-file", str(path)])
+    assert result.code == 0, result.err
+    assert result.out == "[{'package': None, 'name': 'work', 'fields': ['password']}]\n"
+
+
+@pytest.mark.parametrize("phone_state", [
+    {"focusedElement": {}, "isEditable": True},
+    {"focusedElement": {"text": "search"}, "isEditable": False},
+    {"focusedElement": None, "isEditable": True},
+    {"focusedElement": "not-a-field", "isEditable": True},
+])
+def test_credentials_refuse_unfocused_input(
+    fake_core, fake_local, tmp_path, run_script, phone_state
+):
+    from test_bindings import source
+
+    path = tmp_path / "credentials.yaml"
+    path.write_text('work: "file-secret-value"\n')
+    path.chmod(0o600)
+    typed = []
+    raw = {"phone_state": phone_state}
+    ui = types.SimpleNamespace(nodes=[], get=raw.get)
+    fake_core.device = types.SimpleNamespace(
+        ui=lambda: ui, screen_size=lambda: (1080, 1920),
+        type=lambda text, **kwargs: typed.append(text),
+    )
+    result = run_script(source(
+        'device: Device\nvault: Credentials = binding(package="com.example")',
+        'await ctx.vault.type_field(ctx.device, None, "password")',
+    ), extra_args=[
+        "--device-target", "local", "--device-id", "serial", "--credentials-file", str(path),
+    ])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.credentials no text field is focused; "
+        "tap the field before typing a credential"
+    )
+    assert typed == []
+    assert "file-secret-value" not in result.err + json.dumps(result.envelope)
+
+
+def test_missing_yaml_reports_install_extra(tmp_path, monkeypatch, run_script):
+    from test_bindings import source
+
+    path = tmp_path / "credentials.yaml"
+    path.write_text('work: "file-secret-value"\n')
+    path.chmod(0o600)
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    result = run_script(source('vault: Credentials = binding(package="com.example")'),
+                        extra_args=["--credentials-file", str(path)])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.vault install mobilerun-functions[device]"
+    )

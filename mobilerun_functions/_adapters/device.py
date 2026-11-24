@@ -12,10 +12,20 @@ from pydantic import BaseModel
 
 from ..bindings import UIState
 from ..errors import NotAvailableError
-from ..results import ExecutionResult, ExpectationResult, ExpectationVerdict
+from ..results import (
+    ExecutionResult,
+    ExpectationFailed,
+    ExpectationInconclusive,
+    ExpectationResult,
+    ExpectationVerdict,
+)
 from .tasks import Tasks
 
 T = TypeVar("T", bound=BaseModel)
+EXPECT_INSTRUCTION = (
+    "Check, without changing anything on the device, whether: {condition}. "
+    "Report passed=true only if it is clearly true."
+)
 
 
 class _Snapshot:
@@ -23,8 +33,8 @@ class _Snapshot:
         self.elements: list[dict[str, Any]] = raw.nodes
         self.formatted_text = json.dumps(self.elements, ensure_ascii=False)
         self.phone_state: dict[str, Any] = raw.get("phone_state") or {}
-        focused = self.phone_state.get("focusedElement") or {}
-        self.focused_text = str(focused.get("text", ""))
+        focused = self.phone_state.get("focusedElement")
+        self.focused_text = str(focused.get("text", "")) if isinstance(focused, dict) else ""
         self.screen_width = width
         self.screen_height = height
 
@@ -51,9 +61,9 @@ class StateAdapter:
 
 
 class DeviceAdapter:
-    def __init__(self, core: Any, tasks: Tasks | None = None) -> None:
+    def __init__(self, core: Any) -> None:
         self._core = core
-        self._tasks = tasks
+        self._tasks: Tasks | None = None
         self._state = StateAdapter(core)
 
     @property
@@ -64,7 +74,10 @@ class DeviceAdapter:
         value = await asyncio.to_thread(self._core.screenshot, hide_overlay=hide_overlay)
         path = Path(value)
         if value.startswith("/"):
-            return await asyncio.to_thread(path.read_bytes)
+            try:
+                return await asyncio.to_thread(path.read_bytes)
+            finally:
+                await asyncio.to_thread(path.unlink)
         return base64.b64decode(value)
 
     async def tap(self, x: int, y: int) -> None:
@@ -84,7 +97,7 @@ class DeviceAdapter:
         self, text: str, clear: bool = False, stealth: bool = False, wpm: int = 0
     ) -> bool:
         await asyncio.to_thread(
-            self._core.type, text, clear=clear, humanize=not stealth, wpm=wpm or None
+            self._core.type, text, clear=clear, humanize=stealth, wpm=wpm or None
         )
         return True
 
@@ -120,12 +133,19 @@ class DeviceAdapter:
         )
 
     async def expect(self, condition: str, *, timeout: float | None = None) -> ExpectationResult:
-        task = await self.do(condition, output=ExpectationVerdict, timeout=timeout)
+        instruction = EXPECT_INSTRUCTION.format(condition=condition)
+        task = await self.do(instruction, output=ExpectationVerdict, timeout=timeout)
         verdict = task.output
-        passed = task.success and verdict is not None and verdict.passed
-        return ExpectationResult(
-            passed=passed,
+        inconclusive = not task.success or verdict is None
+        if inconclusive:
+            raise ExpectationInconclusive(condition, task)
+        assert verdict is not None
+        result = ExpectationResult(
+            passed=verdict.passed,
             condition=condition,
-            reason=verdict.reason if verdict is not None else task.answer or "No verdict returned",
+            reason=verdict.reason,
             task=task,
         )
+        if not result.passed:
+            raise ExpectationFailed(result)
+        return result

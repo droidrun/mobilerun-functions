@@ -6,6 +6,8 @@ from mobilerun_functions import (
     Context,
     Credentials,
     Device,
+    ExpectationFailed,
+    ExpectationInconclusive,
     Mailbox,
     Operator,
     Proxy,
@@ -39,4 +41,8 @@ async def main(input: Input, ctx: Ctx) -> Output:
     await ctx.credentials.type_field(ctx.device, input.package, "password")
     code = await ctx.mailbox.wait_for_code()
     await ctx.device.input_text(code)
+    try:
+        await ctx.device.expect("The confirmation completed successfully")
+    except (ExpectationFailed, ExpectationInconclusive):
+        return Output(success=False)
     return Output(success=True)

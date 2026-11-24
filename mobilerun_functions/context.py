@@ -23,6 +23,11 @@ if TYPE_CHECKING:
     from mobilerun_core import Device
 
 STATUS_FILE_ENV = "MOBILERUN_FUNCTIONS_STATUS_FILE"
+_BINDING_OVERRIDES = frozenset({"device", "credentials"})
+LEGACY_DEVICE_WARNING = (
+    "ctx.device() is deprecated; declare class Ctx(Context): device: Device "
+    "and use await ctx.device.tap(...) instead"
+)
 
 
 RunMode = Literal["live", "dry_run", "verification"]
@@ -129,7 +134,8 @@ class Context:
         from .bindings import binding
 
         for name in cls.__dict__.get("__annotations__", {}):
-            if name not in cls.__dict__:
+            legacy_declaration = name in _BINDING_OVERRIDES and name not in cls.__dict__
+            if legacy_declaration:
                 setattr(cls, name, binding())
 
     def __init__(
@@ -162,11 +168,11 @@ class Context:
         if not self._device_warned:
             self._device_warned = True
             warnings.warn(
-                "ctx.device() is deprecated; declare class Ctx(Context): device: Device "
-                "and use await ctx.device.tap(...) instead",
+                LEGACY_DEVICE_WARNING,
                 DeprecationWarning,
                 stacklevel=2,
             )
+            self.log.warning(LEGACY_DEVICE_WARNING)
         if self._device is None:
             self._device = connect_device(
                 self.run.device_id,

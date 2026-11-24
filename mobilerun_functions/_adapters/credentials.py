@@ -45,8 +45,19 @@ class CredentialsAdapter:
             )
             if not matches:
                 continue
+            phone_state = (await device.state.refresh()).phone_state
+            focused = phone_state.get("focusedElement")
+            has_focused_input = (
+                isinstance(focused, dict) and bool(focused)
+                and phone_state.get("isEditable") is True
+            )
+            if not has_focused_input:
+                raise NotAvailableError(
+                    "credentials",
+                    "no text field is focused; tap the field before typing a credential",
+                )
             try:
-                accepted = await device.input_text(item.fields[field], stealth=True)
+                accepted = await device.input_text(item.fields[field])
             except Exception:
                 # Driver exceptions can include the typed text. Do not propagate them.
                 raise NotAvailableError("credentials", "device rejected credential input") from None

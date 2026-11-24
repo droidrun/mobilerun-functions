@@ -8,8 +8,13 @@ from typing import Any, get_type_hints
 from pydantic import BaseModel
 
 from .bindings import Binding, Credentials, Device, Mailbox, Operator, Proxy
-from .context import Context
+from .context import _BINDING_OVERRIDES, Context, RunInfo
 from .errors import EntryPointError
+from .schema import MAILBOX_FORMAT, PROXY_FORMAT
+
+_RESERVED_CONTEXT_MEMBERS = (
+    vars(Context).keys() | vars(Context(RunInfo())).keys()
+) - _BINDING_OVERRIDES
 
 INTERFACES = (Device, Credentials, Mailbox, Proxy, Operator)
 _IMPLEMENTATION_HINT = (
@@ -36,6 +41,9 @@ def declarations(ctx: type[Context], input_model: type[BaseModel]) -> tuple[Decl
     seen: set[type] = set()
     packages: set[str] = set()
     for name, interface in hints.items():
+        reserved = name.startswith("_") or name in _RESERVED_CONTEXT_MEMBERS
+        if reserved:
+            raise EntryPointError(f"{name}: reserved Context member; choose another name")
         default = getattr(ctx, name, Binding())
         valid = interface in INTERFACES and isinstance(default, Binding)
         if not valid:
@@ -66,7 +74,7 @@ def _validate_options(
             raise EntryPointError(f'{name}: Credentials requires binding(package="...")')
         return
     if interface in (Mailbox, Proxy):
-        format_name = "mobilerun-mailbox" if interface is Mailbox else "mobilerun-proxy"
+        format_name = MAILBOX_FORMAT if interface is Mailbox else PROXY_FORMAT
         input_name = options.input if isinstance(options.input, str) else ""
         model_field = input_model.model_fields.get(input_name)
         extra = model_field.json_schema_extra if model_field else None

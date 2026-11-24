@@ -270,9 +270,9 @@ The runner captures `MOBILERUN_FUNCTIONS_ENV=cloud` before importing the functio
 platform signal selects cloud bindings even when local device flags are present. Outside the
 platform, local device flags select the existing backends and credentials come from
 `--credentials-file PATH`. `--cloud` forces every binding to the cloud with your own API key.
-The base URL comes from `MOBILERUN_BASE_URL`, then `MOBILERUN_API_BASE_URL`; only `--cloud`
-defaults it to `https://api.mobilerun.ai/v1`. Keys come from `MOBILERUN_API_KEY`, then
-`MOBILERUN_CLOUD_API_KEY`. These connection choices cannot be changed by the function's module.
+The base URL comes from `MOBILERUN_BASE_URL`, then `MOBILERUN_API_BASE_URL`; `--cloud`
+and local mailbox/proxy access default it to `https://api.mobilerun.ai/v1`. Keys come from
+`MOBILERUN_API_KEY`, then `MOBILERUN_CLOUD_API_KEY`. These connection choices cannot be changed by the function's module.
 A binding that cannot be resolved fails the run before `main` with `NotAvailableError` in the
 usual failure envelope.
 
@@ -280,6 +280,9 @@ usual failure envelope.
 # Local device and file credentials
 python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
   --device-target local --device-id emulator-5554 --credentials-file credentials.yaml
+
+# Mailbox-only function, with MOBILERUN_API_KEY already set in the environment
+python -m mobilerun_functions run mailbox_only.py --input-file in.json --result-file out.json
 
 # Same file, cloud resources with your own key already set in the environment
 python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
@@ -300,15 +303,18 @@ another_account: example-only
 
 `credentials.list(package=None)` returns only package, name, and field names.
 `credentials.type_field(device, package, field, name=None)` types directly into a focused
-field and returns no secret value. `package=None` searches the declared credentials;
+field and returns no secret value. It refreshes state and refuses to type unless a non-empty
+focused element is reported with `isEditable: true`. `package=None` searches the declared
+credentials;
 requesting another package cannot expose it. Driver failures while typing credentials are
 reported without the value. Never put credential values in input JSON or log them.
 
 Mailbox access always uses the cloud SDK, also for a local device, and needs
-`MOBILERUN_API_KEY` (or its legacy name) and a base URL. `address` is the resolved address;
+`MOBILERUN_API_KEY` (or its legacy name); the base URL defaults as above. `address` is the
+resolved address;
 `await mailbox.wait_for_code(sender=None, timeout=60, after=None)` polls for an OTP while
-preserving leading zeros. Proxy resolution connects the supplied existing proxy to the run's
-`--device-id` through the device proxy endpoint and **leaves it connected** after the run.
+preserving leading zeros. Proxy resolution requires a cloud device (`--cloud` or
+`--device-target cloud`) and connects the supplied existing proxy to the run's `--device-id` through the device proxy endpoint and **leaves it connected** after the run.
 No resource is bought, created, or deleted during resolution.
 
 The async Device interface provides `screenshot` (bytes), `tap`, `swipe`, `drag`, `input_text`,
@@ -321,7 +327,27 @@ Declaring `operator: Operator` enables `device.do(instruction, output=Model, max
 timeout=...)` and `device.expect(condition, timeout=...)`. Tasks run on the binding's existing
 cloud device, spend normal task usage, and buy nothing. They return `ExecutionResult[T]`
 (success, answer, typed output, steps, task_id, trajectory_path, device) or `ExpectationResult`
-(passed, condition, reason, task). Local execution without `--cloud` fails before `main` with
+(passed, condition, reason, task). `expect` checks without changing device state and returns
+only when the check passes. It raises `ExpectationFailed` for a false verdict (attributes:
+result, condition, reason) and `ExpectationInconclusive` for a failed task or missing verdict
+(attributes: condition, task). Catch those exceptions when a failed check is expected:
+
+```python
+from mobilerun_functions import ExpectationFailed, ExpectationInconclusive
+
+async def check_login(ctx: Ctx) -> bool:
+    try:
+        await ctx.device.expect("The user is logged in")
+    except ExpectationFailed:
+        return False
+    except ExpectationInconclusive:
+        ctx.log.warning("Could not determine the login state")
+        return False
+    return True
+```
+
+No ctx method buys, creates, or deletes resources. Tasks consume usage like any task.
+Local execution without `--cloud` fails before `main` with
 `NotAvailableError("tasks", "needs the framework agent add-on or --cloud")` until the local
 agent add-on ships. See `examples/bindings.py` for a full declaration.
 

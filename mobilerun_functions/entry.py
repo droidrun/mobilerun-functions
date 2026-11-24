@@ -134,7 +134,7 @@ def _build(func: Any) -> EntryPoint:
         valid_context = isinstance(ctx_type, type) and issubclass(ctx_type, Context)
         if not valid_context:
             raise EntryPointError(
-                f"parameter '{ctx_name}': annotation must be Context, "
+                f"parameter '{ctx_name}': annotation must be Context or a Context subclass, "
                 f"got {_describe(hints[ctx_name])}"
             )
 
