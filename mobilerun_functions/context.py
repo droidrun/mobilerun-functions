@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
@@ -121,6 +122,16 @@ class State:
 class Context:
     """Passed to the entry point as `ctx`."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Shadow legacy members (including the read-only credentials stub) with
+        # declarations, so the runner can assign the resolved resource normally.
+        from .bindings import binding
+
+        for name in cls.__dict__.get("__annotations__", {}):
+            if name not in cls.__dict__:
+                setattr(cls, name, binding())
+
     def __init__(
         self,
         run: RunInfo,
@@ -134,6 +145,7 @@ class Context:
         self.dataset = dataset if dataset is not None else DatasetSink()
         self._partial_reason: str | None = None
         self._device: Device | None = None
+        self._device_warned = False
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
@@ -147,6 +159,14 @@ class Context:
 
     def device(self) -> Device:
         """The run's `mobilerun_core` device (connected once, then reused)."""
+        if not self._device_warned:
+            self._device_warned = True
+            warnings.warn(
+                "ctx.device() is deprecated; declare class Ctx(Context): device: Device "
+                "and use await ctx.device.tap(...) instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if self._device is None:
             self._device = connect_device(
                 self.run.device_id,

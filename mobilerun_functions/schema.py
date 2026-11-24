@@ -12,7 +12,9 @@ from .dataset import KEY_MARKER
 
 REJECTED_KEYWORDS = ("pattern", "patternProperties", "prefixItems", "discriminator")
 # The `format` values the platform validates (with `ajv-formats`).
-ALLOWED_FORMATS = ("date-time", "date", "uuid", "uri", "email")
+ALLOWED_FORMATS = (
+    "date-time", "date", "uuid", "uri", "email", "mobilerun-mailbox", "mobilerun-proxy"
+)
 # Keywords whose value is a map of name -> schema.
 _SCHEMA_MAPS = ("properties", "dependentSchemas")
 # Keywords whose value is one schema, with the path suffix that names the position.

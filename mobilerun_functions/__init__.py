@@ -1,5 +1,6 @@
 """Script interface for Mobilerun routine scripts."""
 
+from .bindings import Credentials, Device, Mailbox, Operator, Proxy, UIState, binding
 from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, Log, RunInfo, State
 from .dataset import DATASET_MAX_BYTES, Dataset, key_field
 from .entry import script
@@ -12,6 +13,7 @@ from .errors import (
     NotAvailableError,
     ScriptError,
 )
+from .results import ExecutionResult, ExpectationResult, ExpectationVerdict
 from .schema import ALLOWED_FORMATS
 
 __all__ = [
@@ -22,6 +24,16 @@ __all__ = [
     "RESULT_MAX_BYTES",
     "STATE_MAX_BYTES",
     "Context",
+    "Credentials",
+    "Device",
+    "Mailbox",
+    "Operator",
+    "Proxy",
+    "UIState",
+    "ExecutionResult",
+    "ExpectationResult",
+    "ExpectationVerdict",
+    "binding",
     "Dataset",
     "DatasetItemInvalidError",
     "DatasetTooLargeError",

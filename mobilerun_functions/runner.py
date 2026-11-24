@@ -27,6 +27,7 @@ from pydantic import (
     ValidationError,
 )
 
+from ._connection import Connection
 from ._constants import (
     ERROR_MESSAGE_MAX_CHARS,
     INPUT_ECHO_MAX_BYTES,
@@ -35,6 +36,7 @@ from ._constants import (
 )
 from ._contract import inspect_entry
 from ._io import atomic_write_text, dumps_json, one_line
+from ._resolution import call_bound
 from ._validate import revalidate, validation_details
 from .context import Context, RunInfo, State, StateSnapshot
 from .dataset import DatasetFile, DatasetSink
@@ -105,6 +107,8 @@ class RunOptions:
     run_info: RunInfo
     state_file: str | None = None
     dataset_file: str | None = None
+    cloud: bool = False
+    credentials_file: str | None = None
 
 
 class _StateMeta(BaseModel):
@@ -233,7 +237,12 @@ def _serialise_result(entry: EntryPoint, value: Any) -> tuple[Any, dict[str, Any
     return json.loads(validated.model_dump_json(by_alias=True)), None
 
 
-def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
+def _call(
+    entry: EntryPoint, model_input: BaseModel, ctx: Context,
+    connection: Connection, credentials_file: str | None,
+) -> Any:
+    if entry.context_model is not Context:
+        return asyncio.run(call_bound(entry, model_input, ctx, connection, credentials_file))
     args = (model_input, ctx) if entry.takes_ctx else (model_input,)
     result = entry.func(*args)
     if entry.is_async:
@@ -242,11 +251,14 @@ def _call(entry: EntryPoint, model_input: BaseModel, ctx: Context) -> Any:
 
 
 def _execute(
-    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any]
+    entry: EntryPoint, opts: RunOptions, dataset: DatasetFile | None,
+    input_echo: dict[str, Any], connection: Connection,
 ) -> tuple[dict[str, Any], int]:
     state = _read_state(opts.state_file)
     raw_input = _read_input(opts.input_file)
-    ctx = Context(run=opts.run_info, state=state, dataset=DatasetSink(dataset, entry.item_type))
+    ctx = entry.context_model(
+        run=opts.run_info, state=state, dataset=DatasetSink(dataset, entry.item_type)
+    )
     try:
         try:
             model_input = entry.input_model.model_validate_json(raw_input)
@@ -260,7 +272,7 @@ def _execute(
         echoed_input = _echo_input(model_input)
         if echoed_input is not None:
             input_echo["input"] = echoed_input
-        value = _call(entry, model_input, ctx)
+        value = _call(entry, model_input, ctx, connection, opts.credentials_file)
         result, failure = _serialise_result(entry, value)
         if failure is not None:
             return failure, EXIT_FAILED
@@ -326,7 +338,8 @@ def _open_dataset_file(path: str | None) -> DatasetFile | None:
 
 
 def _run_script(
-    opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any]
+    opts: RunOptions, dataset: DatasetFile | None, input_echo: dict[str, Any],
+    connection: Connection,
 ) -> tuple[dict[str, Any], int]:
     try:
         entry = load_script(opts.path)
@@ -335,7 +348,7 @@ def _run_script(
     except ScriptImportError as exc:
         return _failure_from_exception(exc.original), EXIT_FAILED
     inspect_entry(entry)
-    return _execute(entry, opts, dataset, input_echo)
+    return _execute(entry, opts, dataset, input_echo, connection)
 
 
 def run(opts: RunOptions) -> int:
@@ -344,6 +357,7 @@ def run(opts: RunOptions) -> int:
     SIGTERM ends the run with a `cancelled` envelope (exit 1), whatever the script does after
     the signal; the dataset file keeps its complete lines.
     """
+    connection = Connection.capture(opts.cloud)
     cancellation = _Cancellation()
     cancellation.install()
     dataset = None
@@ -351,7 +365,7 @@ def run(opts: RunOptions) -> int:
     try:
         dataset = _open_dataset_file(opts.dataset_file)
         try:
-            envelope, code = _run_script(opts, dataset, input_echo)
+            envelope, code = _run_script(opts, dataset, input_echo, connection)
             cancellation.disarm()
         except _Cancelled:
             pass

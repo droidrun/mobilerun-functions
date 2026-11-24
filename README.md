@@ -221,6 +221,113 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 ## Context reference
 
+### Bindings contract (0.2.0)
+
+Declare what the function needs using interface types in a `Context` subclass. The runner
+provides implementations before `main`; the function file stays the same locally and in the
+cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, and `Operator` are structural Python
+Protocols. The temporary adapters will be replaced by the framework factory.
+
+```python
+from pydantic import BaseModel, Field
+from mobilerun_functions import Context, Device, Credentials, Mailbox, Proxy, Operator, binding, script
+
+class Input(BaseModel):
+    mailbox_id: str = Field(json_schema_extra={"format": "mobilerun-mailbox"})
+    proxy_id: str = Field(json_schema_extra={"format": "mobilerun-proxy"})
+
+class Ctx(Context):
+    device: Device
+    account: Credentials = binding(package="com.example.app")
+    email: Mailbox = binding(input="mailbox_id")
+    proxy: Proxy = binding(input="proxy_id")
+    operator: Operator
+
+@script
+async def main(input: Input, ctx: Ctx) -> None:
+    await ctx.device.do("Focus the password field", max_steps=5)
+    await ctx.account.type_field(ctx.device, "com.example.app", "password")
+```
+
+Install `mobilerun-functions[device]` for cloud resources; add `[local]` for local device
+backends. `Device` and `Operator` need no default, or `binding()`. Credentials require a
+package and several credentials bindings may declare distinct packages. Mailbox and proxy
+bindings each link to a `str` Input field with the corresponding `format` shown above; the
+input value is the id of an existing resource. At most one of each other interface is allowed.
+An Operator requires a Device. A concrete implementation, other field type, or concrete
+instance in `Ctx` fails `inspect` with “the implementation belongs in the local configuration”.
+
+`inspect` always emits `requires`, including for legacy scripts and scripts without `ctx`:
+
+```json
+{"device": true, "credentials": ["com.example.app"], "mailbox": true, "proxy": true, "tasks": true}
+```
+
+Packages are sorted and unique. Legacy scripts and scripts without `ctx` get all false and
+an empty credentials list. The platform can use this declaration for admission.
+
+The runner captures `MOBILERUN_FUNCTIONS_ENV=cloud` before importing the function. This
+platform signal selects cloud bindings even when local device flags are present. Outside the
+platform, local device flags select the existing backends and credentials come from
+`--credentials-file PATH`. `--cloud` forces every binding to the cloud with your own API key.
+The base URL comes from `MOBILERUN_BASE_URL`, then `MOBILERUN_API_BASE_URL`; only `--cloud`
+defaults it to `https://api.mobilerun.ai/v1`. Keys come from `MOBILERUN_API_KEY`, then
+`MOBILERUN_CLOUD_API_KEY`. These connection choices cannot be changed by the function's module.
+A binding that cannot be resolved fails the run before `main` with `NotAvailableError` in the
+usual failure envelope.
+
+```sh
+# Local device and file credentials
+python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
+  --device-target local --device-id emulator-5554 --credentials-file credentials.yaml
+
+# Same file, cloud resources with your own key already set in the environment
+python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
+  --cloud --device-id YOUR_EXISTING_DEVICE_ID
+```
+
+The credentials file uses the framework's YAML format, package → name → fields. A flat
+`name: value` entry is an unbound credential with the field `password`. Use `chmod 600`:
+files readable or writable by group or others are refused.
+
+```yaml
+com.example.app:
+  work:
+    username: example
+    password: example-only
+another_account: example-only
+```
+
+`credentials.list(package=None)` returns only package, name, and field names.
+`credentials.type_field(device, package, field, name=None)` types directly into a focused
+field and returns no secret value. `package=None` searches the declared credentials;
+requesting another package cannot expose it. Driver failures while typing credentials are
+reported without the value. Never put credential values in input JSON or log them.
+
+Mailbox access always uses the cloud SDK, also for a local device, and needs
+`MOBILERUN_API_KEY` (or its legacy name) and a base URL. `address` is the resolved address;
+`await mailbox.wait_for_code(sender=None, timeout=60, after=None)` polls for an OTP while
+preserving leading zeros. Proxy resolution connects the supplied existing proxy to the run's
+`--device-id` through the device proxy endpoint and **leaves it connected** after the run.
+No resource is bought, created, or deleted during resolution.
+
+The async Device interface provides `screenshot` (bytes), `tap`, `swipe`, `drag`, `input_text`,
+`press_button`, `press_key_code`, `start_app`, `list_apps`, `wait`, `state`, `do`, and `expect`.
+`state.refresh()` returns `UIState` and `state.current` is a property returning the latest snapshot (raises
+`NotAvailableError` before the first refresh). UIState contains elements, formatted_text, focused_text, phone_state,
+screen_width, and screen_height. **The wording of `formatted_text` may change in a later version.**
+
+Declaring `operator: Operator` enables `device.do(instruction, output=Model, max_steps=...,
+timeout=...)` and `device.expect(condition, timeout=...)`. Tasks run on the binding's existing
+cloud device, spend normal task usage, and buy nothing. They return `ExecutionResult[T]`
+(success, answer, typed output, steps, task_id, trajectory_path, device) or `ExpectationResult`
+(passed, condition, reason, task). Local execution without `--cloud` fails before `main` with
+`NotAvailableError("tasks", "needs the framework agent add-on or --cloud")` until the local
+agent add-on ships. See `examples/bindings.py` for a full declaration.
+
+### Legacy Context
+
+
 | Member | Behaviour |
 | --- | --- |
 | `run.run_id` / `run.attempt` | Run identifier (`"local"`) and attempt number (`1`). |
@@ -236,11 +343,13 @@ partial result, and use `ctx.state` to carry data to the next run.
 | `state.save(data, schema=1)` | Copies a JSON value or model; requires `--state-file` in CLI runs. |
 | `dataset.push(item)` | Validates and emits an item for a dataset entry point; buffers without a file. |
 | `partial(reason)` | Marks a successful run incomplete; the last reason wins. |
-| `device()` | Connects once and returns the run's `mobilerun_core.Device`; see below. |
-| `credentials` / `files` / `llm` | Raise `NotAvailableError` in this version. |
+| `device()` | Deprecated: connects once and returns the run's `mobilerun_core.Device`; see below. |
+| `credentials` / `files` / `llm` | Legacy stubs raise `NotAvailableError`. |
 
 ### Control the device
 
+Existing scripts annotated `ctx: Context` keep `ctx.device()` unchanged in 0.2.0.
+The first call per context emits one `DeprecationWarning` naming the new `Ctx` form.
 A run started with a device gives the script `ctx.device()`. It is synchronous and returns the
 `mobilerun-core` device of the run, connected once and reused on every call:
 
@@ -314,7 +423,7 @@ missing, it prints one line on stderr and exits 64. The starter passes `inspect`
 
 On success it prints one JSON object on stdout and exits 0:
 `{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
-"sdkVersion", "warnings"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the
+"sdkVersion", "requires", "warnings"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the
 serialization name of the item field marked with `key_field()` for a `Dataset[Item]` output, else
 `null`. `warnings` is a list of issues (see below). A missing return annotation adds
 `return_annotation_missing`: no output is assumed. Annotate the function to make its intent clear.
@@ -364,7 +473,7 @@ that only read `error.code` and `error.message` keep working. stderr gets one li
 The schemas are limited to a subset the platform can validate. `pattern`, `patternProperties`,
 `prefixItems`, `discriminator` and recursive models are rejected, and so is any `format` outside this list:
 
-`date-time`, `date`, `uuid`, `uri`, `email`
+`date-time`, `date`, `uuid`, `uri`, `email`, `mobilerun-mailbox`, `mobilerun-proxy`
 
 That covers `datetime`, `date`, `UUID`, `AnyUrl`/`HttpUrl` and, for `email`, a `str` field with
 `Field(json_schema_extra={"format": "email"})`. `run` still validates the input with the
@@ -390,6 +499,8 @@ exception as `import_failed` and exits 3.
 | `--attempt` | Attempt number; `1`. |
 | `--mode` | `live`, `dry_run`, `verification`; `live`. |
 | `--deadline` | ISO datetime, informational; absent by default. |
+| `--credentials-file` | Private local credentials YAML file. |
+| `--cloud` | Resolve bindings in the cloud with your API key. |
 | `--device-id` | Cloud UUID or local ADB serial. |
 | `--device-target` | `cloud` (default) or `local`. |
 | `--device-platform` | Local `android` (default) or `ios`; only with local target. |
@@ -450,7 +561,7 @@ the script swallows the interruption or fails while cleaning up. It writes
 false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. Lines already
 pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
 `push` is safe to call from several threads. The deadline is informational; the platform
-enforces it. The package has no timeout or retry logic.
+enforces it. Resource bindings apply their own OTP and task timeouts; the runner itself has no deadline retry logic.
 
 ## Development
 

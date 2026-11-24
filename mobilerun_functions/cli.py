@@ -53,6 +53,8 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("path")
     run_p.add_argument("--input-file", required=True)
     run_p.add_argument("--result-file", required=True)
+    run_p.add_argument("--cloud", action="store_true", help="resolve bindings with your cloud key")
+    run_p.add_argument("--credentials-file", help="private local credentials YAML file")
     run_p.add_argument("--state-file")
     run_p.add_argument("--dataset-file")
     run_p.add_argument("--run-id", default="local")
@@ -148,6 +150,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         run_info=info,
         state_file=args.state_file,
         dataset_file=args.dataset_file,
+        cloud=args.cloud,
+        credentials_file=args.credentials_file,
     )
     try:
         return run(opts)

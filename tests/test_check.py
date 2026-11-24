@@ -1,6 +1,7 @@
 """Static script checks in `inspect`: codes, lines and repair hints."""
 
 import json
+import sys
 import textwrap
 
 import pytest
@@ -239,7 +240,10 @@ def test_runtime_name_error_for_context_gets_the_hint(inspect_source):
 
 
 @pytest.mark.parametrize("module", ["mobilerun", "mobilerun_sandbox", "mobilerun_sdk"])
-def test_runtime_module_not_found_for_the_wrong_modules_gets_the_hint(inspect_source, module):
+def test_runtime_module_not_found_for_the_wrong_modules_gets_the_hint(
+    inspect_source, module, monkeypatch
+):
+    monkeypatch.setitem(sys.modules, module, None)
     # An import the static check does not look at: inside a function called at import time.
     source = _source(
         GOOD_IMPORT,

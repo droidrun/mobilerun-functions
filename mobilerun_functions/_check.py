@@ -205,7 +205,7 @@ def is_setup_mistake(exc: BaseException | None) -> bool:
         name = getattr(exc, "name", None) or ""
         if isinstance(exc, NameError) and name in _SDK_NAMES:
             return True
-        if isinstance(exc, ModuleNotFoundError) and name.split(".")[0] in _WRONG_MODULES:
+        if isinstance(exc, ImportError) and name.split(".")[0] in _WRONG_MODULES:
             return True
         exc = exc.__cause__
     return False
