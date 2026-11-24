@@ -225,12 +225,12 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 Declare what the function needs using interface types in a `Context` subclass. The runner
 provides implementations before `main`; the function file stays the same locally and in the
-cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, `Operator`, and `LLM` are structural Python
+cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, `Tasks`, and `LLM` are structural Python
 Protocols. The temporary adapters will be replaced by the framework factory.
 
 ```python
 from pydantic import BaseModel, Field
-from mobilerun_functions import Context, Device, Credentials, LLM, Mailbox, Proxy, Operator, binding, script
+from mobilerun_functions import Context, Device, Credentials, LLM, Mailbox, Proxy, Tasks, binding, script
 
 class Input(BaseModel):
     mailbox_id: str = Field(json_schema_extra={"format": "mobilerun-mailbox"})
@@ -241,22 +241,23 @@ class Ctx(Context):
     account: Credentials = binding(package="com.example.app")
     email: Mailbox = binding(input="mailbox_id")
     proxy: Proxy = binding(input="proxy_id")
-    operator: Operator
+    tasks: Tasks
     llm: LLM
 
 @script
 async def main(input: Input, ctx: Ctx) -> None:
-    await ctx.device.do("Focus the password field", max_steps=5)
+    await ctx.tasks.run("Focus the password field", device=ctx.device, max_steps=5)
     await ctx.account.type_field(ctx.device, "com.example.app", "password")
 ```
 
 Install `mobilerun-functions[device]` for cloud resources; add `[local]` for local device
-backends. `Device` and `Operator` need no default, or `binding()`. Credentials require a
+backends. `Device` and `Tasks` need no default, or `binding()`. Credentials require a
 package and several credentials bindings may declare distinct packages. Mailbox and proxy
 bindings each link to a `str` Input field with the corresponding `format` shown above; the
 input value is the id of an existing resource. At most one of each other interface is allowed.
-An Operator requires a Device. A concrete implementation, other field type, or concrete
-instance in `Ctx` fails `inspect` with “the implementation belongs in the local configuration”.
+`Tasks` requires the `Device` binding (there is one device in the context). A concrete
+implementation, other field type, or concrete instance in `Ctx` fails `inspect` with
+“the implementation belongs in the local configuration”.
 
 `inspect` always emits `requires`, including for legacy scripts and scripts without `ctx`:
 
@@ -336,38 +337,36 @@ reply = await client.chat.completions.create(
 ```
 
 The async Device interface provides `screenshot` (bytes), `tap`, `swipe`, `drag`, `input_text`,
-`press_button`, `press_key_code`, `start_app`, `list_apps`, `wait`, `state`, `do`, and `expect`.
+`press_button`, `press_key_code`, `start_app`, `list_apps`, `wait`, and `state`.
 `state.refresh()` returns `UIState` and `state.current` is a property returning the latest snapshot (raises
 `NotAvailableError` before the first refresh). UIState contains elements, formatted_text, focused_text, phone_state,
 screen_width, and screen_height. **The wording of `formatted_text` may change in a later version.**
 
-Declaring `operator: Operator` enables `device.do(instruction, output=Model, max_steps=...,
-timeout=...)` and `device.expect(condition, timeout=...)`. Tasks run on the binding's existing
-cloud device, spend normal task usage, and buy nothing. They return `ExecutionResult[T]`
-(success, answer, typed output, steps, task_id, trajectory_path, device) or `ExpectationResult`
-(passed, condition, reason, task). `expect` checks without changing device state and returns
-only when the check passes. It raises `ExpectationFailed` for a false verdict (attributes:
-result, condition, reason) and `ExpectationInconclusive` for a failed task or missing verdict
-(attributes: condition, task). Catch those exceptions when a failed check is expected:
+Declaring `tasks: Tasks` provides `await ctx.tasks.run(task, device=ctx.device, output=Model,
+max_steps=..., timeout=...)`. It runs a natural-language task on the context's device, spends
+normal task usage, and buys nothing. `device` must be the context's `Device`; any other object
+raises `NotAvailableError("tasks", "device is not the run's device")` before a call is made.
+`timeout` is in seconds (default 1800). The result is an `ExecutionResult[T]` (success, answer,
+typed output, steps, task_id, trajectory_path, device); an output that does not match `Model`
+sets `success` to false.
 
 ```python
-from mobilerun_functions import ExpectationFailed, ExpectationInconclusive
+class Login(BaseModel):
+    logged_in: bool
 
-async def check_login(ctx: Ctx) -> bool:
-    try:
-        await ctx.device.expect("The user is logged in")
-    except ExpectationFailed:
-        return False
-    except ExpectationInconclusive:
-        ctx.log.warning("Could not determine the login state")
-        return False
-    return True
+result = await ctx.tasks.run("Check whether the user is logged in", device=ctx.device, output=Login)
+if not result.success or result.output is None:
+    ctx.log.warning("Could not determine the login state")
 ```
 
+In the platform the task goes through the run's own task routes, which hand the run's device
+lease to the task and take it back when the task ends. Refusals surface as
+`NotAvailableError("tasks", code)` with the code `device_lease_not_held`, `tasks_not_declared`,
+`run_not_active` or `device_not_in_run`. With `--cloud` the public tasks API is used with your
+own key. Local execution without `--cloud` fails before `main` with
+`NotAvailableError("tasks", "needs --cloud")`. See `examples/bindings.py` for a full declaration.
+
 No ctx method buys, creates, or deletes resources. Tasks consume usage like any task.
-Local execution without `--cloud` fails before `main` with
-`NotAvailableError("tasks", "needs the framework agent add-on or --cloud")` until the local
-agent add-on ships. See `examples/bindings.py` for a full declaration.
 
 ### Legacy Context
 

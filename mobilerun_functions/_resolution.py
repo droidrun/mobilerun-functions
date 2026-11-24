@@ -13,15 +13,15 @@ from ._adapters.credentials import CredentialsAdapter, read_cloud, read_file
 from ._adapters.device import DeviceAdapter
 from ._adapters.llm import LLMAdapter
 from ._adapters.resources import MailboxAdapter, ProxyAdapter
-from ._adapters.tasks import Tasks
+from ._adapters.tasks import CloudTasks, RunTasks
 from ._connection import Connection
-from .bindings import LLM, Credentials, Mailbox, Operator, Proxy
+from .bindings import LLM, Credentials, Mailbox, Proxy, Tasks
 from .context import Context, DeviceTarget, RunInfo
 from .device import connect_device
 from .entry import EntryPoint
 from .errors import NotAvailableError
 
-LOCAL_TASKS_REASON = "needs the framework agent add-on or --cloud"
+LOCAL_TASKS_REASON = "needs --cloud"
 
 
 async def call_bound(
@@ -47,7 +47,7 @@ async def _resolve(
     stack: AsyncExitStack,
 ) -> None:
     interfaces = {item.interface for item in entry.bindings}
-    local_tasks = Operator in interfaces and not connection.cloud
+    local_tasks = Tasks in interfaces and not connection.cloud
     if local_tasks:
         raise NotAvailableError("tasks", LOCAL_TASKS_REASON)
     local_proxy = Proxy in interfaces and not _cloud_device(ctx.run, connection)
@@ -63,7 +63,7 @@ async def _resolve(
         member = item.name
         reading_credentials = item.interface is Credentials and credentials is None
         try:
-            remote_resource = item.interface in (Mailbox, Proxy, Operator)
+            remote_resource = item.interface in (Mailbox, Proxy, Tasks)
             remote_credentials = item.interface is Credentials and connection.cloud
             needs_client = client is None and (remote_resource or remote_credentials)
             if needs_client:
@@ -95,8 +95,8 @@ async def _resolve(
                 proxy_id = getattr(model_input, item.options.input or "")
                 await client.devices.proxy.connect(ctx.run.device_id, connect={"id": proxy_id})
                 value = ProxyAdapter(client, ctx.run.device_id)
-            elif item.interface is Operator:
-                value = object()  # Marker only; the device gets the task client below.
+            elif item.interface is Tasks:
+                continue  # Built below: it needs the device binding.
             elif item.interface is LLM:
                 base_url, api_key = connection.require_cloud(member)
                 value = LLMAdapter(base_url, api_key)
@@ -104,7 +104,7 @@ async def _resolve(
                 core = await _device(ctx, connection)
                 if hasattr(core, "close"):
                     stack.callback(core.close)
-                device = DeviceAdapter(core)
+                device = DeviceAdapter(core, ctx.run.device_id)
                 value = device
             setattr(ctx, item.name, value)
         except NotAvailableError as exc:
@@ -114,10 +114,16 @@ async def _resolve(
             raise NotAvailableError(member, "install mobilerun-functions[device]") from None
         except Exception as exc:
             raise NotAvailableError(member, _resolution_reason(exc, reading_credentials)) from None
-    if Operator in interfaces:
-        assert device is not None
-        assert ctx.run.device_id is not None
-        device._tasks = Tasks(client, ctx.run.device_id)
+    for item in entry.bindings:
+        if item.interface is Tasks:
+            assert device is not None
+            setattr(ctx, item.name, _tasks(client, device, ctx.run, connection))
+
+
+def _tasks(client: Any, device: DeviceAdapter, run: RunInfo, connection: Connection) -> Any:
+    if connection.platform:
+        return RunTasks(client, device, run.run_id)
+    return CloudTasks(client, device)
 
 
 def _cloud_device(run: RunInfo, connection: Connection) -> bool:

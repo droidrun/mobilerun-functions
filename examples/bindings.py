@@ -7,11 +7,9 @@ from mobilerun_functions import (
     Context,
     Credentials,
     Device,
-    ExpectationFailed,
-    ExpectationInconclusive,
     Mailbox,
-    Operator,
     Proxy,
+    Tasks,
     binding,
     script,
 )
@@ -27,19 +25,23 @@ class Output(BaseModel):
     success: bool
 
 
+class Confirmation(BaseModel):
+    confirmed: bool
+
+
 class Ctx(Context):
     device: Device
     credentials: Credentials = binding(package="com.example.app")
     mailbox: Mailbox = binding(input="mailbox_id")
     proxy: Proxy = binding(input="proxy_id")
-    operator: Operator
+    tasks: Tasks
     llm: LLM
 
 
 @script
 async def main(input: Input, ctx: Ctx) -> Output:
     await ctx.device.start_app(input.package)
-    await ctx.device.do("Focus the password field", max_steps=5)
+    await ctx.tasks.run("Focus the password field", device=ctx.device, max_steps=5)
     await ctx.credentials.type_field(ctx.device, input.package, "password")
     reply = await ctx.llm.openai().chat.completions.create(
         model="openai/gpt-4o",
@@ -48,8 +50,9 @@ async def main(input: Input, ctx: Ctx) -> Output:
     ctx.log.info(reply.choices[0].message.content)
     code = await ctx.mailbox.wait_for_code()
     await ctx.device.input_text(code)
-    try:
-        await ctx.device.expect("The confirmation completed successfully")
-    except (ExpectationFailed, ExpectationInconclusive):
-        return Output(success=False)
-    return Output(success=True)
+    check = await ctx.tasks.run(
+        "Check whether the confirmation completed successfully",
+        device=ctx.device,
+        output=Confirmation,
+    )
+    return Output(success=check.success and check.output is not None and check.output.confirmed)
