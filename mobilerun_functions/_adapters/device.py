@@ -6,10 +6,26 @@ import asyncio
 import base64
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
+
+from pydantic import BaseModel
 
 from ..bindings import UIState
 from ..errors import NotAvailableError
+from ..results import (
+    ExecutionResult,
+    ExpectationFailed,
+    ExpectationInconclusive,
+    ExpectationResult,
+    ExpectationVerdict,
+)
+from .tasks import Tasks
+
+T = TypeVar("T", bound=BaseModel)
+EXPECT_INSTRUCTION = (
+    "Check, without changing anything on the device, whether: {condition}. "
+    "Report passed=true only if it is clearly true."
+)
 
 
 class _Snapshot:
@@ -45,9 +61,9 @@ class StateAdapter:
 
 
 class DeviceAdapter:
-    def __init__(self, core: Any, device_id: str | None) -> None:
+    def __init__(self, core: Any) -> None:
         self._core = core
-        self.device_id = device_id
+        self._tasks: Tasks | None = None
         self._state = StateAdapter(core)
 
     @property
@@ -101,3 +117,35 @@ class DeviceAdapter:
 
     async def wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
+
+    async def do(
+        self,
+        instruction: str,
+        *,
+        output: type[T] | None = None,
+        max_steps: int | None = None,
+        timeout: float | None = None,
+    ) -> ExecutionResult[T]:
+        if self._tasks is None:
+            raise NotAvailableError("tasks", "declare an Operator binding and use --cloud")
+        return await self._tasks.run(
+            instruction, output=output, max_steps=max_steps, timeout=timeout
+        )
+
+    async def expect(self, condition: str, *, timeout: float | None = None) -> ExpectationResult:
+        instruction = EXPECT_INSTRUCTION.format(condition=condition)
+        task = await self.do(instruction, output=ExpectationVerdict, timeout=timeout)
+        verdict = task.output
+        inconclusive = not task.success or verdict is None
+        if inconclusive:
+            raise ExpectationInconclusive(condition, task)
+        assert verdict is not None
+        result = ExpectationResult(
+            passed=verdict.passed,
+            condition=condition,
+            reason=verdict.reason,
+            task=task,
+        )
+        if not result.passed:
+            raise ExpectationFailed(result)
+        return result

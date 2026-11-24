@@ -17,19 +17,15 @@ class Connection:
     cloud: bool
     base_url: str | None
     api_key: str | None = field(repr=False)
-    # Cloud because the platform runs the function (a run holds the device), not because of --cloud.
-    platform: bool = False
 
     @classmethod
     def capture(cls, force_cloud: bool) -> Connection:
-        on_platform = os.environ.get(PLATFORM_ENV) == "cloud"
-        cloud = force_cloud or on_platform
-        platform = on_platform and not force_cloud
+        cloud = force_cloud or os.environ.get(PLATFORM_ENV) == "cloud"
         base_url, api_key = _cloud_connection()
         use_default_base = force_cloud and not base_url
         if use_default_base:
             base_url = CLOUD_BASE_URL
-        return cls(cloud=cloud, base_url=base_url, api_key=api_key, platform=platform)
+        return cls(cloud=cloud, base_url=base_url, api_key=api_key)
 
     def require_cloud(self, member: str) -> tuple[str, str]:
         if not self.api_key:

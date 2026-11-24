@@ -7,7 +7,7 @@ import pytest
 PRELUDE = '''
 from pydantic import BaseModel, Field
 from mobilerun_functions import (
-    Context, Credentials, Device, LLM, Mailbox, Proxy, Tasks, binding, script,
+    Context, Credentials, Device, LLM, Mailbox, Operator, Proxy, binding, script,
 )
 
 class Input(BaseModel):
@@ -25,7 +25,7 @@ def source(fields, body="pass", *, before=""):
 
 def test_inspect_bindings_requires_and_input_formats(inspect_source):
     code, out, err = inspect_source(source(
-        'phone: Device\ntasks: Tasks = binding()\n'
+        'phone: Device\noperator: Operator = binding()\n'
         'netflix: Credentials = binding(package="com.netflix.mediaclient")\n'
         'gmail: Credentials = binding(package="com.google.android.gm")\n'
         'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")\n'
@@ -73,7 +73,7 @@ def test_inspect_rejects_implementations_and_other_types(inspect_source, field):
 
 @pytest.mark.parametrize("fields,message", [
     ("phone: Device\nsecond: Device", "at most one Device"),
-    ("phone: Device\na: Tasks\nb: Tasks", "at most one Tasks"),
+    ("phone: Device\na: Operator\nb: Operator", "at most one Operator"),
     ('a: Mailbox = binding(input="mailbox_id")\nb: Mailbox = binding(input="mailbox_id")',
      "at most one Mailbox"),
     ('a: Proxy = binding(input="proxy_id")\nb: Proxy = binding(input="proxy_id")',
@@ -81,13 +81,12 @@ def test_inspect_rejects_implementations_and_other_types(inspect_source, field):
     ("a: LLM\nb: LLM", "at most one LLM"),
     ("llm: LLM = binding(package='pkg')", "accepts only binding()"),
     ('llm: LLM = binding(input="mailbox_id")', "accepts only binding()"),
-    ("tasks: Tasks", "tasks: requires a Device binding"),
+    ("operator: Operator", "requires a Device"),
     ("vault: Credentials", 'Credentials requires binding(package="...")'),
     ('a: Credentials = binding(package="pkg")\nb: Credentials = binding(package="pkg")',
      "credential packages must be distinct"),
     ('phone: Device = binding(package="pkg")', "accepts only binding()"),
-    ("phone: Device\ntasks: Tasks = binding(input='proxy_id')", "accepts only binding()"),
-    ('phone: Device\ntasks: Tasks = "cloud"', "tasks: the implementation belongs"),
+    ("phone: Device\noperator: Operator = binding(input='proxy_id')", "accepts only binding()"),
     ("email: Mailbox", "requires binding"),
     ('proxy: Proxy = binding(input="absent")', "requires binding"),
     ('email: Mailbox = binding(input="proxy_id")', 'format "mobilerun-mailbox"'),
@@ -135,10 +134,12 @@ def test_missing_device_fails_before_main(run_script):
     assert "main was called" not in result.err
 
 
-def test_local_tasks_fail_before_main(run_script):
-    result = run_script(source("device: Device\ntasks: Tasks", 'print("MAIN")'))
+def test_local_operator_fails_before_main(run_script):
+    result = run_script(source("device: Device\noperator: Operator", 'print("MAIN")'))
     assert result.code == 1
-    assert result.envelope["error"]["message"] == "NotAvailableError: ctx.tasks needs --cloud"
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.tasks needs the framework agent add-on or --cloud"
+    )
     assert result.out == ""
 
 

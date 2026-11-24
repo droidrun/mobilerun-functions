@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from pydantic import BaseModel
 
-from .results import ExecutionResult
+from .results import ExecutionResult, ExpectationResult
 
 if TYPE_CHECKING:
     import openai
@@ -49,6 +49,19 @@ class Device(Protocol):
     async def wait(self, seconds: float) -> None: ...
     @property
     def state(self) -> DeviceState: ...
+    async def do(
+        self,
+        instruction: str,
+        *,
+        output: type[T] | None = None,
+        max_steps: int | None = None,
+        timeout: float | None = None,
+    ) -> ExecutionResult[T]: ...
+    async def expect(
+        self, condition: str, *, timeout: float | None = None
+    ) -> ExpectationResult:
+        """Return on pass; raise ExpectationFailed or ExpectationInconclusive otherwise."""
+        ...
     async def press_key_code(self, key_code: int) -> None: ...
 
 
@@ -87,18 +100,8 @@ class LLM(Protocol):
         ...
 
 
-class Tasks(Protocol):
-    """Run natural-language tasks on the run's device; spends normal task usage."""
-
-    async def run(
-        self,
-        task: str,
-        *,
-        device: Device,
-        output: type[T] | None = None,
-        max_steps: int | None = None,
-        timeout: float | None = None,
-    ) -> ExecutionResult[T]: ...
+class Operator(Protocol):
+    """Declaring this binding enables the device's task operations."""
 
 
 @dataclass(frozen=True)
