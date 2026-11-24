@@ -7,7 +7,7 @@ from typing import Any, get_type_hints
 
 from pydantic import BaseModel
 
-from .bindings import LLM, Binding, Credentials, Device, Mailbox, Operator, Proxy
+from .bindings import LLM, Binding, Credentials, Device, Mailbox, Proxy, Tasks
 from .context import _BINDING_OVERRIDES, Context, RunInfo
 from .errors import EntryPointError
 from .schema import MAILBOX_FORMAT, PROXY_FORMAT
@@ -16,7 +16,7 @@ _RESERVED_CONTEXT_MEMBERS = (
     vars(Context).keys() | vars(Context(RunInfo())).keys()
 ) - _BINDING_OVERRIDES
 
-INTERFACES = (Device, Credentials, Mailbox, Proxy, Operator, LLM)
+INTERFACES = (Device, Credentials, Mailbox, Proxy, Tasks, LLM)
 _IMPLEMENTATION_HINT = (
     "the implementation belongs in the local configuration; "
     "declare the interface type with binding(...)"
@@ -59,9 +59,9 @@ def declarations(ctx: type[Context], input_model: type[BaseModel]) -> tuple[Decl
             packages.add(default.package)
         seen.add(interface)
         result.append(Declaration(name, interface, default))
-    missing_operator_device = Operator in seen and Device not in seen
-    if missing_operator_device:
-        raise EntryPointError("operator: requires a Device binding")
+    missing_tasks_device = Tasks in seen and Device not in seen
+    if missing_tasks_device:
+        raise EntryPointError("tasks: requires a Device binding")
     return tuple(result)
 
 
@@ -105,6 +105,6 @@ def requirements(items: tuple[Declaration, ...]) -> dict[str, Any]:
         }),
         "mailbox": Mailbox in interfaces,
         "proxy": Proxy in interfaces,
-        "tasks": Operator in interfaces,
+        "tasks": Tasks in interfaces,
         "llm": LLM in interfaces,
     }

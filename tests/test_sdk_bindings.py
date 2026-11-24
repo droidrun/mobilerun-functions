@@ -6,7 +6,9 @@ import asyncio
 import json
 import sys
 import types
+import uuid
 from collections import deque
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -181,8 +183,9 @@ def test_tasks_run_and_poll_structured_output(sdk, core, run_script):
         }),
     ])
     result = run_script(source(
-        'device: Device\noperator: Operator',
-        'print((await ctx.device.do("read screen", output=Answer, max_steps=8)).model_dump_json())',
+        "device: Device\ntasks: Tasks",
+        'run = await ctx.tasks.run("read screen", device=ctx.device, output=Answer, max_steps=8)\n'
+        '    print(run.model_dump_json())',
         before='\nclass Answer(BaseModel):\n    answer: str\n',
     ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
@@ -198,32 +201,6 @@ def test_tasks_run_and_poll_structured_output(sdk, core, run_script):
     assert body["outputSchema"]["properties"]["answer"]["type"] == "string"
 
 
-def test_expect_returns_only_a_passing_verdict(sdk, core, run_script):
-    responses, requests = sdk
-    responses.extend([
-        (200, {"id": "task-1"}),
-        (200, {
-            "status": "completed", "terminal": True, "succeeded": True,
-            "message": "done", "output": {"passed": True, "reason": "screen matches"},
-        }),
-    ])
-    result = run_script(source(
-        'device: Device\noperator: Operator',
-        'print((await ctx.device.expect("screen ready")).model_dump_json())',
-    ), extra_args=["--cloud", "--device-id", "dev-1"])
-    assert result.code == 0, result.err
-    verdict = json.loads(result.out)
-    assert verdict["passed"] is True
-    assert verdict["condition"] == "screen ready" and verdict["reason"] == "screen matches"
-    assert verdict["task"]["success"] is True
-    body = json.loads(requests[0].content)
-    assert body["task"] == (
-        "Check, without changing anything on the device, whether: screen ready. "
-        "Report passed=true only if it is clearly true."
-    )
-    assert body["outputSchema"]["required"] == ["passed", "reason"]
-
-
 def test_invalid_task_output_marks_execution_failed(sdk, core, run_script):
     responses, _ = sdk
     responses.extend([
@@ -234,9 +211,10 @@ def test_invalid_task_output_marks_execution_failed(sdk, core, run_script):
         }),
     ])
     result = run_script(source(
-        'device: Device\noperator: Operator',
-        'print((await ctx.device.do("ready", output=ExpectationVerdict)).model_dump_json())',
-        before="\nfrom mobilerun_functions import ExpectationVerdict\n",
+        "device: Device\ntasks: Tasks",
+        'run = await ctx.tasks.run("ready", device=ctx.device, output=Verdict)\n'
+        '    print(run.model_dump_json())',
+        before="\nclass Verdict(BaseModel):\n    passed: bool\n",
     ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
     execution = json.loads(result.out)
@@ -244,8 +222,14 @@ def test_invalid_task_output_marks_execution_failed(sdk, core, run_script):
     assert execution["answer"] == "task output does not match the output schema"
 
 
+def run_device(device_id="dev-1"):
+    from mobilerun_functions._adapters.device import DeviceAdapter
+
+    return DeviceAdapter(object(), device_id)
+
+
 def test_task_deadline_interrupts_polling_and_stops_existing_task():
-    from mobilerun_functions._adapters.tasks import Tasks
+    from mobilerun_functions._adapters.tasks import CloudTasks
 
     stopped = []
     polling = []
@@ -263,11 +247,12 @@ def test_task_deadline_interrupts_polling_and_stops_existing_task():
         async def stop(task_id):
             stopped.append(task_id)
 
-        tasks = Tasks(types.SimpleNamespace(tasks=types.SimpleNamespace(
+        device = run_device()
+        tasks = CloudTasks(types.SimpleNamespace(tasks=types.SimpleNamespace(
             run=run, get_status=status, stop=stop,
-        )), "dev-1")
+        )), device)
         with pytest.raises(TimeoutError):
-            await tasks.run("read screen", timeout=0.01)
+            await tasks.run("read screen", device=device, timeout=0.01)
 
     asyncio.run(exercise())
     assert polling == ["task-1"]
@@ -314,8 +299,8 @@ def test_task_polls_through_running_until_terminal(sdk, core, monkeypatch, run_s
     pause = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", pause)
     result = run_script(source(
-        "device: Device\noperator: Operator",
-        'print((await ctx.device.do("read screen")).success)',
+        "device: Device\ntasks: Tasks",
+        'print((await ctx.tasks.run("read screen", device=ctx.device)).success)',
     ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
     assert result.out == "True\n"
@@ -375,81 +360,8 @@ def test_local_mailbox_defaults_to_public_api(sdk, monkeypatch, run_script):
     assert str(requests[0].url) == "https://api.mobilerun.ai/v1/mailboxes/mailbox-1"
 
 
-def test_expect_false_raises_failed_with_framework_attributes(sdk, core, run_script):
-    responses, _ = sdk
-    responses.extend([
-        (200, {"id": "task-1"}),
-        (200, {
-            "status": "completed", "terminal": True, "succeeded": True,
-            "output": {"passed": False, "reason": "screen differs"},
-        }),
-    ])
-    result = run_script(source("device: Device\noperator: Operator", '''
-try:
-    await ctx.device.expect("screen ready")
-except ExpectationFailed as exc:
-    print(exc.condition, exc.reason, str(exc))
-    print(exc.result.model_dump_json())
-'''.strip().replace("\n", "\n    "),
-        before="\nfrom mobilerun_functions import ExpectationFailed\n",
-    ), extra_args=["--cloud", "--device-id", "dev-1"])
-    assert result.code == 0, result.err
-    fields, payload = result.out.splitlines()
-    assert fields == "screen ready screen differs screen differs"
-    verdict = json.loads(payload)
-    assert verdict["passed"] is False
-    assert verdict["condition"] == "screen ready" and verdict["reason"] == "screen differs"
-    assert verdict["task"]["success"] is True
-
-
-def test_expect_failed_task_raises_inconclusive_with_framework_attributes(sdk, core, run_script):
-    responses, _ = sdk
-    responses.extend([
-        (200, {"id": "task-1"}),
-        (200, {
-            "status": "failed", "terminal": True, "succeeded": False,
-            "output": {"passed": True, "reason": "unreliable"},
-        }),
-    ])
-    result = run_script(source("device: Device\noperator: Operator", '''
-try:
-    await ctx.device.expect("screen ready")
-except ExpectationInconclusive as exc:
-    print(exc.condition, str(exc))
-    print(exc.task.model_dump_json())
-'''.strip().replace("\n", "\n    "),
-        before="\nfrom mobilerun_functions import ExpectationInconclusive\n",
-    ), extra_args=["--cloud", "--device-id", "dev-1"])
-    assert result.code == 0, result.err
-    message, payload = result.out.splitlines()
-    assert message == (
-        "screen ready Could not determine whether the expectation holds: no structured verdict"
-    )
-    task = json.loads(payload)
-    assert task["success"] is False and task["task_id"] == "task-1"
-    assert task["output"] == {"passed": True, "reason": "unreliable"}
-
-
-def test_expect_missing_verdict_raises_inconclusive(sdk, core, run_script):
-    responses, _ = sdk
-    responses.extend([
-        (200, {"id": "task-1"}),
-        (200, {"status": "completed", "terminal": True, "succeeded": True, "output": None}),
-    ])
-    result = run_script(source("device: Device\noperator: Operator", '''
-try:
-    await ctx.device.expect("screen ready")
-except ExpectationInconclusive as exc:
-    print(exc.condition, exc.task.output)
-'''.strip().replace("\n", "\n    "),
-        before="\nfrom mobilerun_functions import ExpectationInconclusive\n",
-    ), extra_args=["--cloud", "--device-id", "dev-1"])
-    assert result.code == 0, result.err
-    assert result.out == "screen ready None\n"
-
-
 def test_task_deadline_starts_after_creation_returns():
-    from mobilerun_functions._adapters.tasks import Tasks
+    from mobilerun_functions._adapters.tasks import CloudTasks
 
     creation_options = []
 
@@ -468,7 +380,8 @@ def test_task_deadline_starts_after_creation_returns():
             )
 
         client = types.SimpleNamespace(tasks=types.SimpleNamespace(run=run, get_status=status))
-        return await Tasks(client, "dev-1").run("read screen", timeout=0.001)
+        device = run_device()
+        return await CloudTasks(client, device).run("read screen", device=device, timeout=0.001)
 
     result = asyncio.run(exercise())
     assert result.success is True and result.task_id == "task-1"
@@ -488,6 +401,220 @@ def test_credential_read_failure_remains_opaque_and_names_binding(sdk, run_scrip
         "NotAvailableError: ctx.vault binding could not be resolved"
     )
     assert "vault-secret" not in result.err + json.dumps(result.envelope)
+
+
+# run-scoped tasks (platform)
+
+
+def run_task(status="pending", **fields):
+    return {"data": {
+        "id": "run-task-1", "runId": "run-1", "status": status, "taskId": None,
+        "succeeded": None, "message": None, "output": None, "steps": None, **fields,
+    }}
+
+
+@pytest.fixture
+def platform(sdk, core, monkeypatch):
+    monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", "cloud")
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+    return sdk
+
+
+PLATFORM_ARGS = ["--run-id", "run-1", "--device-id", "dev-1"]
+
+
+def tasks_script(call_args=""):
+    extra = f", {call_args}" if call_args else ""
+    return source(
+        "device: Device\ntasks: Tasks",
+        f'print((await ctx.tasks.run("read screen", device=ctx.device{extra})).model_dump_json())',
+        before="\nclass Answer(BaseModel):\n    answer: str\n",
+    )
+
+
+def test_platform_tasks_go_through_the_run_routes_and_poll(platform, run_script):
+    responses, requests = platform
+    responses.extend([
+        (202, run_task()),
+        (200, run_task("running")),
+        (200, run_task(
+            "completed", succeeded=True, message="done", output={"answer": "ready"}, steps=4,
+        )),
+    ])
+    result = run_script(tasks_script("output=Answer, max_steps=8"), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    assert json.loads(result.out) == {
+        "success": True, "answer": "done", "output": {"answer": "ready"}, "steps": 4,
+        "task_id": "run-task-1", "trajectory_path": None, "device": "CloudDevice",
+    }
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("POST", "/v1/compute/runs/run-1/tasks"),
+        ("GET", "/v1/compute/runs/run-1/tasks/run-task-1"),
+        ("GET", "/v1/compute/runs/run-1/tasks/run-task-1"),
+    ]
+    assert requests[0].headers["authorization"] == "Bearer test-key"
+    body = json.loads(requests[0].content)
+    assert body["outputSchema"]["properties"]["answer"]["type"] == "string"
+    assert {key: body[key] for key in ("task", "deviceId", "maxSteps")} == {
+        "task": "read screen", "deviceId": "dev-1", "maxSteps": 8,
+    }
+    assert set(body) == {"task", "deviceId", "outputSchema", "maxSteps"}
+
+
+def test_platform_task_key_is_new_per_call(platform, run_script):
+    responses, requests = platform
+    finished = run_task("completed", succeeded=True)
+    responses.extend([(202, run_task()), (200, finished), (202, run_task()), (200, finished)])
+    result = run_script(source(
+        "device: Device\ntasks: Tasks",
+        'await ctx.tasks.run("first", device=ctx.device)\n'
+        '    await ctx.tasks.run("second", device=ctx.device)',
+    ), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    keys = [r.headers["idempotency-key"] for r in requests if r.method == "POST"]
+    assert len(keys) == 2 and keys[0] != keys[1]
+    assert all(uuid.UUID(key).version == 4 for key in keys)
+    assert all("idempotency-key" not in r.headers for r in requests if r.method == "GET")
+
+
+@pytest.mark.parametrize("timeout,expected", [(0.2, 1), (10.2, 11), (3000, 2700)])
+def test_platform_task_timeout_is_whole_seconds_within_the_route_limits(
+    platform, run_script, timeout, expected
+):
+    responses, requests = platform
+    responses.extend([(202, run_task()), (200, run_task("completed", succeeded=True))])
+    result = run_script(tasks_script(f"timeout={timeout}"), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    assert json.loads(requests[0].content)["timeoutS"] == expected
+
+
+def test_platform_task_timeout_of_zero_is_sent_as_one_second(platform, run_script):
+    responses, requests = platform
+    responses.extend([(202, run_task()), (200, run_task("completed", succeeded=True))])
+    result = run_script(tasks_script("timeout=0"), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    assert json.loads(requests[0].content)["timeoutS"] == 1
+
+
+def test_platform_task_without_timeout_sends_no_limit(platform, run_script):
+    responses, requests = platform
+    responses.extend([(202, run_task()), (200, run_task("completed", succeeded=True))])
+    result = run_script(tasks_script(), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    assert "timeoutS" not in json.loads(requests[0].content)
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_platform_task_ends_on_every_terminal_status(platform, run_script, status):
+    responses, requests = platform
+    responses.extend([
+        (202, run_task()),
+        (200, run_task(status, succeeded=False, message="stopped")),
+    ])
+    result = run_script(tasks_script(), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    execution = json.loads(result.out)
+    assert execution["success"] is False and execution["answer"] == "stopped"
+    assert len(requests) == 2
+
+
+def test_platform_invalid_task_output_marks_execution_failed(platform, run_script):
+    responses, _ = platform
+    responses.extend([
+        (202, run_task()),
+        (200, run_task("completed", succeeded=True, output={"answer": 1})),
+    ])
+    result = run_script(tasks_script("output=Answer"), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    execution = json.loads(result.out)
+    assert execution["success"] is False and execution["output"] is None
+    assert execution["answer"] == "task output does not match the output schema"
+
+
+@pytest.mark.parametrize("code,status", [
+    ("device_lease_not_held", 409), ("tasks_not_declared", 403), ("run_not_active", 409),
+    ("device_not_in_run", 422),
+])
+def test_platform_task_refusals_become_not_available(platform, run_script, code, status):
+    responses, requests = platform
+    responses.append((status, {"code": code, "message": "refused"}))
+    result = run_script(tasks_script(), extra_args=PLATFORM_ARGS)
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == f"NotAvailableError: ctx.tasks {code}"
+    assert len(requests) == 1
+
+
+def test_platform_other_task_errors_are_not_reported_as_unavailable(platform, run_script):
+    responses, _ = platform
+    responses.append((429, {"code": "run_task_limit", "message": "limit"}))
+    result = run_script(tasks_script(), extra_args=PLATFORM_ARGS)
+    assert result.code == 1
+    assert "NotAvailableError" not in result.envelope["error"]["message"]
+
+
+def test_platform_task_deadline_spans_polling_and_cancels_the_run_task(monkeypatch):
+    from mobilerun_functions._adapters.tasks import RunTasks
+
+    monkeypatch.setattr("mobilerun_functions._adapters.tasks.POLL_INTERVAL", 0.01)
+    requests = []
+
+    async def handle(request):
+        requests.append((request.method, request.url.path))
+        if request.method == "POST":
+            return httpx.Response(202, json=run_task())
+        return httpx.Response(200, json=run_task("running"))
+
+    async def exercise():
+        client = SDKClient(
+            api_key="test-key", base_url="https://api.example.test/v1", max_retries=0,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+        )
+        device = run_device()
+        with pytest.raises(TimeoutError):
+            await RunTasks(client, device, "run-1").run("read screen", device=device, timeout=0.1)
+
+    asyncio.run(exercise())
+    task_path = "/v1/compute/runs/run-1/tasks/run-task-1"
+    assert requests[0] == ("POST", "/v1/compute/runs/run-1/tasks")
+    assert requests[1:-1].count(("GET", task_path)) >= 2
+    assert requests[-1] == ("POST", f"{task_path}/cancel")
+
+
+def test_cloud_flag_keeps_public_tasks_even_with_the_platform_signal(platform, run_script):
+    responses, requests = platform
+    responses.extend([
+        (200, {"id": "task-1"}), (200, {"status": "completed", "terminal": True}),
+    ])
+    result = run_script(tasks_script(), extra_args=["--cloud", *PLATFORM_ARGS])
+    assert result.code == 0, result.err
+    assert [request.url.path for request in requests] == ["/v1/tasks", "/v1/tasks/task-1/status"]
+    assert json.loads(requests[0].content)["deviceId"] == "dev-1"
+
+
+@pytest.mark.parametrize("extra_args", [["--cloud", "--device-id", "dev-1"], PLATFORM_ARGS])
+def test_task_on_another_device_fails_before_any_call(platform, run_script, extra_args):
+    _, requests = platform
+    result = run_script(source(
+        "device: Device\ntasks: Tasks",
+        'await ctx.tasks.run("read screen", device=object())',
+    ), extra_args=extra_args)
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.tasks device is not the run's device"
+    )
+    assert requests == []
+
+
+def test_tasks_may_be_declared_before_the_device(sdk, core, run_script):
+    responses, requests = sdk
+    responses.extend([
+        (200, {"id": "task-1"}), (200, {"status": "completed", "terminal": True}),
+    ])
+    result = run_script(source(
+        "tasks: Tasks\ndevice: Device", 'await ctx.tasks.run("x", device=ctx.device)',
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    assert json.loads(requests[0].content)["deviceId"] == "dev-1"
 
 
 # ctx.llm
