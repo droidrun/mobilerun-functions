@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field
 
 from mobilerun_functions import (
+    LLM,
     Context,
     Credentials,
     Device,
@@ -32,6 +33,7 @@ class Ctx(Context):
     mailbox: Mailbox = binding(input="mailbox_id")
     proxy: Proxy = binding(input="proxy_id")
     operator: Operator
+    llm: LLM
 
 
 @script
@@ -39,6 +41,11 @@ async def main(input: Input, ctx: Ctx) -> Output:
     await ctx.device.start_app(input.package)
     await ctx.device.do("Focus the password field", max_steps=5)
     await ctx.credentials.type_field(ctx.device, input.package, "password")
+    reply = await ctx.llm.openai().chat.completions.create(
+        model="openai/gpt-4o",
+        messages=[{"role": "user", "content": "Say hello in one word"}],
+    )
+    ctx.log.info(reply.choices[0].message.content)
     code = await ctx.mailbox.wait_for_code()
     await ctx.device.input_text(code)
     try:

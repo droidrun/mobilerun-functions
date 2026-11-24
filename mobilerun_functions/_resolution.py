@@ -11,10 +11,11 @@ from pydantic import BaseModel
 
 from ._adapters.credentials import CredentialsAdapter, read_cloud, read_file
 from ._adapters.device import DeviceAdapter
+from ._adapters.llm import LLMAdapter
 from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import Tasks
 from ._connection import Connection
-from .bindings import Credentials, Mailbox, Operator, Proxy
+from .bindings import LLM, Credentials, Mailbox, Operator, Proxy
 from .context import Context, DeviceTarget, RunInfo
 from .device import connect_device
 from .entry import EntryPoint
@@ -96,6 +97,9 @@ async def _resolve(
                 value = ProxyAdapter(client, ctx.run.device_id)
             elif item.interface is Operator:
                 value = object()  # Marker only; the device gets the task client below.
+            elif item.interface is LLM:
+                base_url, api_key = connection.require_cloud(member)
+                value = LLMAdapter(base_url, api_key)
             else:
                 core = await _device(ctx, connection)
                 if hasattr(core, "close"):

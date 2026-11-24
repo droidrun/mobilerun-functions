@@ -488,3 +488,93 @@ def test_credential_read_failure_remains_opaque_and_names_binding(sdk, run_scrip
         "NotAvailableError: ctx.vault binding could not be resolved"
     )
     assert "vault-secret" not in result.err + json.dumps(result.envelope)
+
+
+# ctx.llm
+
+
+LLM_SCRIPT = 'print(ctx.llm.base_url, ctx.llm.api_key)'
+
+
+def test_local_llm_uses_the_users_key_and_resolves_without_network(sdk, run_script):
+    _, requests = sdk
+    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    assert result.code == 0, result.err
+    assert result.out == "https://api.example.test/v1 test-key\n"
+    assert requests == []
+
+
+def test_local_llm_defaults_to_the_public_gateway(sdk, monkeypatch, run_script):
+    monkeypatch.delenv("MOBILERUN_BASE_URL")
+    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    assert result.code == 0, result.err
+    assert result.out == "https://api.mobilerun.ai/v1 test-key\n"
+
+
+def test_platform_llm_uses_the_injected_base_url_and_placeholder_key(sdk, monkeypatch, run_script):
+    monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", "cloud")
+    monkeypatch.setenv("MOBILERUN_BASE_URL", "https://api.dev.example.test/v1")
+    monkeypatch.setenv("MOBILERUN_API_KEY", "placeholder-key")
+    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    assert result.code == 0, result.err
+    assert result.out == "https://api.dev.example.test/v1 placeholder-key\n"
+
+
+def test_cloud_flag_llm_is_the_same_gateway(sdk, monkeypatch, run_script):
+    monkeypatch.delenv("MOBILERUN_BASE_URL")
+    result = run_script(source("llm: LLM", LLM_SCRIPT), extra_args=["--cloud"])
+    assert result.code == 0, result.err
+    assert result.out == "https://api.mobilerun.ai/v1 test-key\n"
+
+
+@pytest.mark.parametrize("platform_env", [None, "cloud"])
+def test_llm_without_key_fails_before_main(sdk, monkeypatch, run_script, platform_env):
+    if platform_env:
+        monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", platform_env)
+    monkeypatch.delenv("MOBILERUN_API_KEY")
+    result = run_script(source("llm: LLM", 'print("MAIN")'))
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == "NotAvailableError: ctx.llm set MOBILERUN_API_KEY"
+    assert result.out == ""
+
+
+def test_platform_llm_without_base_url_fails_before_main(sdk, monkeypatch, run_script):
+    monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", "cloud")
+    monkeypatch.delenv("MOBILERUN_BASE_URL")
+    result = run_script(source("llm: LLM", 'print("MAIN")'))
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.llm set MOBILERUN_BASE_URL"
+    )
+
+
+def test_llm_does_not_need_the_device_sdk(sdk, monkeypatch, run_script):
+    monkeypatch.setitem(sys.modules, "mobilerun_sdk", None)
+    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    assert result.code == 0, result.err
+
+
+def test_llm_openai_returns_a_client_for_the_gateway(sdk, run_script):
+    result = run_script(source(
+        "llm: LLM",
+        'c = ctx.llm.openai(); print(type(c).__name__, c.base_url, c.api_key)',
+    ))
+    assert result.code == 0, result.err
+    assert result.out == "AsyncOpenAI https://api.example.test/v1/ test-key\n"
+
+
+def test_llm_openai_names_the_extra_when_it_is_missing(sdk, monkeypatch, run_script):
+    monkeypatch.setitem(sys.modules, "openai", None)
+    result = run_script(source("llm: LLM", "ctx.llm.openai()"))
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.llm install mobilerun-functions[llm]"
+    )
+
+
+def test_llm_adapter_repr_hides_the_key():
+    from mobilerun_functions._adapters.llm import LLMAdapter
+
+    text = repr(LLMAdapter("https://api.example.test/v1", "secret-key"))
+    assert "secret-key" not in text
+    assert "https://api.example.test/v1" in text

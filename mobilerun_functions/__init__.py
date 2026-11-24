@@ -1,6 +1,6 @@
 """Script interface for Mobilerun routine scripts."""
 
-from .bindings import Credentials, Device, Mailbox, Operator, Proxy, UIState, binding
+from .bindings import LLM, Credentials, Device, Mailbox, Operator, Proxy, UIState, binding
 from .context import RESULT_MAX_BYTES, STATE_MAX_BYTES, Context, Log, RunInfo, State
 from .dataset import DATASET_MAX_BYTES, Dataset, key_field
 from .entry import script
@@ -32,6 +32,7 @@ __all__ = [
     "Context",
     "Credentials",
     "Device",
+    "LLM",
     "Mailbox",
     "Operator",
     "Proxy",

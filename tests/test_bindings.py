@@ -7,7 +7,7 @@ import pytest
 PRELUDE = '''
 from pydantic import BaseModel, Field
 from mobilerun_functions import (
-    Context, Credentials, Device, Mailbox, Operator, Proxy, binding, script,
+    Context, Credentials, Device, LLM, Mailbox, Operator, Proxy, binding, script,
 )
 
 class Input(BaseModel):
@@ -28,7 +28,8 @@ def test_inspect_bindings_requires_and_input_formats(inspect_source):
         'phone: Device\noperator: Operator = binding()\n'
         'netflix: Credentials = binding(package="com.netflix.mediaclient")\n'
         'gmail: Credentials = binding(package="com.google.android.gm")\n'
-        'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")'
+        'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")\n'
+        'llm: LLM'
     ))
     assert code == 0, err
     document = json.loads(out)
@@ -38,6 +39,7 @@ def test_inspect_bindings_requires_and_input_formats(inspect_source):
         "mailbox": True,
         "proxy": True,
         "tasks": True,
+        "llm": True,
     }
     assert document["inputSchema"]["properties"]["mailbox_id"]["format"] == "mobilerun-mailbox"
     assert document["inputSchema"]["properties"]["proxy_id"]["format"] == "mobilerun-proxy"
@@ -51,6 +53,7 @@ def test_legacy_and_no_context_require_nothing(inspect_source, signature):
     assert code == 0
     assert json.loads(out)["requires"] == {
         "device": False, "credentials": [], "mailbox": False, "proxy": False, "tasks": False,
+        "llm": False,
     }
 
 
@@ -75,6 +78,9 @@ def test_inspect_rejects_implementations_and_other_types(inspect_source, field):
      "at most one Mailbox"),
     ('a: Proxy = binding(input="proxy_id")\nb: Proxy = binding(input="proxy_id")',
      "at most one Proxy"),
+    ("a: LLM\nb: LLM", "at most one LLM"),
+    ("llm: LLM = binding(package='pkg')", "accepts only binding()"),
+    ('llm: LLM = binding(input="mailbox_id")', "accepts only binding()"),
     ("operator: Operator", "requires a Device"),
     ("vault: Credentials", 'Credentials requires binding(package="...")'),
     ('a: Credentials = binding(package="pkg")\nb: Credentials = binding(package="pkg")',
@@ -148,7 +154,7 @@ def test_sync_empty_context_can_run_its_own_event_loop(run_script):
 
 
 @pytest.mark.parametrize("name", [
-    "run", "log", "state", "dataset", "partial", "partial_reason", "files", "llm",
+    "run", "log", "state", "dataset", "partial", "partial_reason", "files",
     "_private", "_device", "__dict__",
 ])
 def test_reserved_context_binding_names_are_rejected(inspect_source, run_script, name):
@@ -162,3 +168,11 @@ def test_reserved_context_binding_names_are_rejected(inspect_source, run_script,
     result = run_script(script)
     assert result.code == 3 and result.envelope is None
     assert result.err == err
+
+
+def test_llm_stub_on_plain_context_says_how_to_declare_it(run_script):
+    result = run_script(source("pass", "ctx.llm"))
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.llm is not available: declare `llm: LLM` in your Ctx"
+    )

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from pydantic import BaseModel
 
 from .results import ExecutionResult, ExpectationResult
+
+if TYPE_CHECKING:
+    import openai
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -83,6 +86,18 @@ class Mailbox(Protocol):
 
 class Proxy(Protocol):
     async def status(self) -> dict[str, Any]: ...
+
+
+class LLM(Protocol):
+    """OpenAI-compatible access to the platform LLM, billed to the run's organization."""
+
+    @property
+    def base_url(self) -> str: ...
+    @property
+    def api_key(self) -> str: ...
+    def openai(self) -> openai.AsyncOpenAI:
+        """A new client for `base_url`; needs `mobilerun-functions[llm]`."""
+        ...
 
 
 class Operator(Protocol):
