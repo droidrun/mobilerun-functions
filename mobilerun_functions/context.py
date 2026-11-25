@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
@@ -22,12 +24,32 @@ if TYPE_CHECKING:
     from mobilerun_core import Device
 
 STATUS_FILE_ENV = "MOBILERUN_FUNCTIONS_STATUS_FILE"
+_BINDING_OVERRIDES = frozenset({"device", "credentials", "ai"})
+LEGACY_DEVICE_WARNING = (
+    "ctx.device() is deprecated; declare class Ctx(Context): device: Device "
+    "and use await ctx.device.tap(...) instead"
+)
 
 
 RunMode = Literal["live", "dry_run", "verification"]
 DeviceTarget = Literal["local", "cloud"]
 DevicePlatform = Literal["android", "ios"]
+ProxyKind = Literal["connect", "byo"]
+_UUID = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _STRICT_INT: TypeAdapter[int] = TypeAdapter(StrictInt)
+
+
+def is_uuid(value: object) -> bool:
+    """True for a UUID in its canonical 8-4-4-4-12 spelling, with no surrounding text."""
+    return isinstance(value, str) and _UUID.fullmatch(value) is not None
+
+
+@dataclass(frozen=True)
+class ProxyRef:
+    """An existing proxy selected for the run; `byo` is reserved and refused at resolution."""
+
+    kind: ProxyKind
+    id: str
 
 
 @dataclass(frozen=True)
@@ -40,6 +62,8 @@ class RunInfo:
     device_target: DeviceTarget = "cloud"
     device_platform: DevicePlatform | None = None
     device_url: str | None = None
+    mailbox_id: str | None = None
+    proxy: ProxyRef | None = None
 
 
 class Log:
@@ -121,6 +145,17 @@ class State:
 class Context:
     """Passed to the entry point as `ctx`."""
 
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Shadow legacy members (including the read-only credentials stub) with
+        # declarations, so the runner can assign the resolved resource normally.
+        from .bindings import binding
+
+        for name in cls.__dict__.get("__annotations__", {}):
+            legacy_declaration = name in _BINDING_OVERRIDES and name not in cls.__dict__
+            if legacy_declaration:
+                setattr(cls, name, binding())
+
     def __init__(
         self,
         run: RunInfo,
@@ -134,6 +169,7 @@ class Context:
         self.dataset = dataset if dataset is not None else DatasetSink()
         self._partial_reason: str | None = None
         self._device: Device | None = None
+        self._device_warned = False
 
     def partial(self, reason: str) -> None:
         """Mark the run as partial; the entry point still returns its result."""
@@ -147,6 +183,14 @@ class Context:
 
     def device(self) -> Device:
         """The run's `mobilerun_core` device (connected once, then reused)."""
+        if not self._device_warned:
+            self._device_warned = True
+            warnings.warn(
+                LEGACY_DEVICE_WARNING,
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.log.warning(LEGACY_DEVICE_WARNING)
         if self._device is None:
             self._device = connect_device(
                 self.run.device_id,
@@ -165,5 +209,5 @@ class Context:
         raise NotAvailableError("files")
 
     @property
-    def llm(self) -> NoReturn:
-        raise NotAvailableError("llm")
+    def ai(self) -> NoReturn:
+        raise NotAvailableError("ai", "is not available: declare `ai: AI` in your Ctx")

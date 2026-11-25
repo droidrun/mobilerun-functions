@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ._check import RETURN_ANNOTATION_MISSING, Issue
+from ._declarations import requirements
 from ._version import SDK_VERSION
 from .entry import EntryPoint
 from .schema import dataset_key, input_schema, output_schema
@@ -35,4 +36,5 @@ def inspect_entry(entry: EntryPoint) -> dict[str, Any]:
         else None,
         "sdkVersion": SDK_VERSION,
         "warnings": warnings,
+        "requires": requirements(entry.bindings),
     }

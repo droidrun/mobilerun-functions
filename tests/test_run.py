@@ -263,7 +263,7 @@ for name, get in [
     ("device", lambda: ctx.device()),
     ("credentials", lambda: ctx.credentials),
     ("files", lambda: ctx.files),
-    ("llm", lambda: ctx.llm),
+    ("ai", lambda: ctx.ai),
 ]:
     try:
         get()
@@ -282,7 +282,7 @@ RUN_INFO = (
 def test_context_members_not_available(run_script):
     r = run_script(script_source(CONTEXT_MEMBERS))
     assert r.code == 0
-    assert r.envelope["result"] == {"greeting": "device,credentials,files,llm"}
+    assert r.envelope["result"] == {"greeting": "device,credentials,files,ai"}
 
 
 def test_run_info_from_flags(run_script):
@@ -748,3 +748,62 @@ def test_missing_return_annotation_warns_but_runs(inspect_source, run_script):
     assert len(warnings) == 1
     assert warnings[0]["code"] == "return_annotation_missing"
     assert run_script(source).code == 0
+
+
+# run resources: mailbox and proxy selected by CLI flags
+
+RESOURCE_MAILBOX = "0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8"
+RESOURCE_PROXY = "7a6b5c4d-3e2f-4a10-9b8c-7d6e5f4a3b2c"
+RUN_INFO_SOURCE = (
+    "from pydantic import BaseModel\n"
+    "from mobilerun_functions import Context, script\n"
+    "class Input(BaseModel):\n    mailbox_id: str = 'business-value'\n"
+    "@script\n"
+    "def main(input: Input, ctx: Context) -> None:\n"
+    "    print(ctx.run.mailbox_id, ctx.run.proxy)\n"
+    "    print(input.mailbox_id)\n"
+)
+
+
+def test_run_info_carries_resource_flags(run_script):
+    from mobilerun_functions import ProxyRef
+
+    r = run_script(RUN_INFO_SOURCE, extra_args=[
+        "--mailbox-id", RESOURCE_MAILBOX, "--proxy-kind", "connect", "--proxy-id", RESOURCE_PROXY,
+    ])
+    assert r.code == 0, r.err
+    assert r.out == (
+        f"{RESOURCE_MAILBOX} {ProxyRef('connect', RESOURCE_PROXY)!r}\nbusiness-value\n"
+    )
+
+
+def test_run_info_resources_default_to_none(run_script):
+    r = run_script(RUN_INFO_SOURCE)
+    assert r.code == 0, r.err
+    assert r.out == "None None\nbusiness-value\n"
+
+
+def test_byo_proxy_kind_parses_as_the_reserved_kind(run_script):
+    r = run_script(RUN_INFO_SOURCE, extra_args=[
+        "--proxy-kind", "byo", "--proxy-id", RESOURCE_PROXY,
+    ])
+    assert r.code == 0, r.err
+    assert f"ProxyRef(kind='byo', id='{RESOURCE_PROXY}')" in r.out
+
+
+@pytest.mark.parametrize("flags,message", [
+    (["--proxy-kind", "connect"], "--proxy-kind and --proxy-id must be given together"),
+    (["--proxy-id", RESOURCE_PROXY], "--proxy-kind and --proxy-id must be given together"),
+    (["--proxy-kind", "vpn", "--proxy-id", RESOURCE_PROXY], "invalid choice: 'vpn'"),
+    (["--proxy-kind", "connect", "--proxy-id", "proxy-1"], "argument --proxy-id: must be a UUID"),
+    (["--proxy-kind", "connect", "--proxy-id", f" {RESOURCE_PROXY}"], "must be a UUID"),
+    (["--mailbox-id", "mailbox-1"], "argument --mailbox-id: must be a UUID"),
+    (["--mailbox-id", RESOURCE_MAILBOX.replace("-", "")], "must be a UUID"),
+])
+def test_resource_flag_misuse_is_a_usage_error_before_main(run_script, capsys, flags, message):
+    with pytest.raises(SystemExit) as info:
+        run_script(RUN_INFO_SOURCE, extra_args=flags)
+    assert info.value.code == 64
+    captured = capsys.readouterr()
+    assert message in captured.err
+    assert captured.out == ""

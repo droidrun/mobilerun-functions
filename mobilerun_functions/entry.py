@@ -12,6 +12,7 @@ from typing import Any, Literal, TypeGuard, TypeVar
 from pydantic import BaseModel
 
 from ._constants import MODULE_NAME
+from ._declarations import Declaration, declarations
 from .context import Context
 from .dataset import Dataset
 from .errors import EntryPointError
@@ -27,6 +28,8 @@ class EntryPoint:
     name: str
     is_async: bool
     takes_ctx: bool
+    context_model: type[Context]
+    bindings: tuple[Declaration, ...]
     input_model: type[BaseModel]
     output_model: type[BaseModel] | None
     allows_none: bool
@@ -121,23 +124,31 @@ def _build(func: Any) -> EntryPoint:
             f"got {_describe(input_model)}"
         )
 
+    context_model = Context
     takes_ctx = len(params) == 2
     if takes_ctx:
         ctx_name = params[1].name
         if ctx_name not in hints:
             raise EntryPointError(f"parameter '{ctx_name}': missing annotation (Context)")
-        if hints[ctx_name] is not Context:
+        ctx_type = hints[ctx_name]
+        valid_context = isinstance(ctx_type, type) and issubclass(ctx_type, Context)
+        if not valid_context:
             raise EntryPointError(
-                f"parameter '{ctx_name}': annotation must be Context, "
+                f"parameter '{ctx_name}': annotation must be Context or a Context subclass, "
                 f"got {_describe(hints[ctx_name])}"
             )
 
+        context_model = ctx_type
+
+    bindings = declarations(context_model)
     output_model = _output_model(hints)
     return EntryPoint(
         func=func,
         name=func.__name__,
         is_async=inspect.iscoroutinefunction(func),
         takes_ctx=takes_ctx,
+        context_model=context_model,
+        bindings=bindings,
         input_model=input_model,
         output_model=output_model,
         allows_none=(output_model is None or type(None) in typing.get_args(hints.get("return"))),

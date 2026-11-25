@@ -14,8 +14,12 @@ class Output(BaseModel):
     message: str
 
 
+class Ctx(Context):
+    pass
+
+
 @script
-def main(input: Input, ctx: Context) -> Output:
+def main(input: Input, ctx: Ctx) -> Output:
     ctx.log.info(f"greeting {input.name}")
     return Output(message=f"{input.greeting}, {input.name}!")
 '''
