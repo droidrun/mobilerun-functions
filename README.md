@@ -14,7 +14,7 @@ which needs `by_name` validation from pydantic 2.11).
 pip install mobilerun-functions
 ```
 
-For device control add the extra: `pip install "mobilerun-functions[device]"`.
+For device control add the extra: `pip install "mobilerun-functions[device]"`. For `ctx.ai.openai()` add `[ai]` (`openai>=3,<4`).
 
 ## Hello
 
@@ -221,6 +221,184 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 ## Context reference
 
+### Bindings contract (0.2.0rc1)
+
+Declare what the function needs using interface types in a `Context` subclass. The runner
+provides implementations before `main`; the function file stays the same locally and in the
+cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, `Tasks`, and `AI` are structural Python
+Protocols. The temporary adapters will be replaced by the framework factory.
+
+```python
+from pydantic import BaseModel
+from mobilerun_functions import Context, Device, Credentials, AI, Mailbox, Proxy, Tasks, binding, script
+
+class Input(BaseModel):
+    package: str = "com.example.app"
+
+class Ctx(Context):
+    device: Device
+    account: Credentials = binding(package="com.example.app")
+    email: Mailbox
+    proxy: Proxy
+    tasks: Tasks
+    ai: AI
+
+@script
+async def main(input: Input, ctx: Ctx) -> None:
+    await ctx.tasks.run("Focus the password field", device=ctx.device, max_steps=5)
+    await ctx.account.type_field(ctx.device, "password")
+```
+
+Install `mobilerun-functions[device]` for cloud resources; add `[local]` for local device
+backends. `Device`, `Mailbox`, `Proxy` and `Tasks` need no default, or `binding()`; they accept no
+options. Credentials require
+`binding(package="...")`; without it `inspect` fails. Each credentials binding is bound to its
+package, and several bindings may declare distinct packages. A `Proxy` binding requires a
+`Device` binding, as `Tasks` does. `Mailbox` and `Proxy` are run resources: a bare annotation
+only declares the need, and the Input model stays pure business input. The run selects the
+existing resource (see below), never the input; a field named `mailbox_id` in your Input is
+an ordinary business field and is not read. `binding(input=...)` and package options on
+`Mailbox` or `Proxy` are refused. At most one of each other interface is allowed.
+`Tasks` requires the `Device` binding (there is one device in the context). A concrete
+implementation, other field type, or concrete instance in `Ctx` fails `inspect` with
+“the implementation belongs in the local configuration”.
+
+`inspect` always emits `requires`, including for legacy scripts and scripts without `ctx`:
+
+```json
+{"device": true, "credentials": ["com.example.app"], "mailbox": true, "proxy": true, "tasks": true, "ai": true}
+```
+
+Packages are sorted and unique. Legacy scripts and scripts without `ctx` get all false and
+an empty credentials list. The platform can use this declaration for admission.
+
+The runner captures `MOBILERUN_FUNCTIONS_ENV=cloud` before importing the function. This
+platform signal selects cloud bindings even when local device flags are present. Outside the
+platform, local device flags select the existing backends and credentials come from
+`--credentials-file PATH`. `--cloud` forces every binding to the cloud with your own API key.
+The base URL comes from `MOBILERUN_BASE_URL`, then `MOBILERUN_API_BASE_URL`; `--cloud`
+and local mailbox/proxy access default it to `https://api.mobilerun.ai/v1`. Keys come from
+`MOBILERUN_API_KEY`, then `MOBILERUN_CLOUD_API_KEY`. These connection choices cannot be changed by the function's module.
+A binding that cannot be resolved fails the run before `main` with `NotAvailableError` in the
+usual failure envelope.
+
+```sh
+# Local device and file credentials
+python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
+  --device-target local --device-id emulator-5554 --credentials-file credentials.yaml
+
+# Mailbox-only function, with MOBILERUN_API_KEY already set in the environment
+python -m mobilerun_functions run mailbox_only.py --input-file in.json --result-file out.json \
+  --mailbox-id MAILBOX_UUID
+
+# Same file, cloud resources with your own key already set in the environment
+python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
+  --cloud --device-id YOUR_EXISTING_DEVICE_ID
+
+# Existing cloud mailbox and Connect proxy (this process drives existing cloud resources)
+python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
+  --cloud --device-id DEVICE_UUID --mailbox-id MAILBOX_UUID \
+  --proxy-kind connect --proxy-id CONNECT_UUID
+```
+
+The credentials file uses the framework's YAML format, package → name → fields. A flat
+`name: value` entry has the field `password` and binds to the declared package. Use `chmod 600`:
+files readable or writable by group or others are refused.
+
+```yaml
+com.example.app:
+  work:
+    username: example
+    password: example-only
+another_account: example-only
+```
+
+`credentials.list()` returns only package, name, and field names of the bound package.
+`credentials.type_field(device, field, *, name=None)` types directly into a focused field
+and returns no secret value; the package is the one declared with `binding(package=...)`.
+It accepts only the run's own bound device. It refreshes state and refuses to type unless the
+bound package is the foreground app (Android package or iOS bundle id; an unknown foreground
+app is refused) and a focused element is reported with `isEditable: true`. The typing call
+raises the SDK loggers to at least `INFO`, so `MOBILERUN_LOG=debug` never writes the value. A flat `name: value` entry of a local credentials file binds to the
+declared package. In the cloud, only the declared packages are read (one request per
+package); other packages' values never enter the run. The runtime reads only the declared
+credential packages; your function's own code can use whatever its run key allows. Function
+code holding a full run key can call any API that key allows, including the device proxy
+endpoint; the runtime itself only attaches the proxy selected by id. Driver failures while typing
+credentials are reported without the value. Never put credential values in input JSON or log
+them.
+
+The run selects the resources: `ctx.run.mailbox_id` (a UUID or `None`) and `ctx.run.proxy`
+(a `ProxyRef(kind, id)` or `None`; `kind` is `"connect"` or the reserved `"byo"`), set by
+`--mailbox-id` and the paired `--proxy-kind`/`--proxy-id`. A half pair, an unknown kind or an
+invalid UUID is a usage error before `main`. A declared `Mailbox` or `Proxy` without its
+selection, a `byo` proxy and a proxy without a cloud device fail before `main` and before any
+remote call, whatever the declaration order. Mailbox access always uses the cloud SDK, also for a local device, and needs
+`MOBILERUN_API_KEY` (or its legacy name); the base URL defaults as above. `address` is the
+resolved address;
+`await mailbox.wait_for_code(sender=None, timeout=60, after=None)` polls for an OTP while
+preserving leading zeros. Only a code received after the wait began (UTC), or after `after`
+when you pass it, is returned. No code yet (204) keeps polling; an unknown mailbox (404), a
+conflict (409) or an auth error fails at once, and `timeout` raises `TimeoutError`.
+Proxy resolution requires a cloud device (`--cloud` or
+`--device-target cloud`) and a `connect` proxy: it connects the selected existing proxy to the run's `--device-id` through the device proxy endpoint, exactly once and before `main`, and **leaves it connected** after the run. The proxy is attached
+only in live runs; in `dry_run` and `verification` runs nothing is attached and `status()` still
+reads the device's proxy. Adapter I/O of a synchronous `main` runs on the runner's event loop, so
+`asyncio.run(ctx.email.wait_for_code())` is safe there.
+No resource is bought, created, or deleted during resolution.
+
+Declaring `ai: AI` (`binding()` only, at most one) gives an OpenAI-compatible client for the
+platform AI: `ctx.ai.base_url` (the API base URL plus `/ai`, for example `https://api.mobilerun.ai/v1/ai`), `ctx.ai.api_key` (a bearer for that base URL
+only) and `ctx.ai.openai()`, a new `openai.AsyncOpenAI` for it (needs `mobilerun-functions[ai]`,
+else `NotAvailableError("ai", "install mobilerun-functions[ai]")`). `ai` is the one binding
+that is cloud in both modes: it always calls the Mobilerun gateway, with your own key locally
+(`MOBILERUN_API_KEY`, base URL defaulting as above) and with the platform's run credentials in
+the cloud, where `api_key` is only a placeholder. Resolution makes no network call. Scoped
+API keys are refused by the gateway, and usage is billed to the run's organization, not to
+the function author. A missing key fails the run before `main`.
+
+```python
+client = ctx.ai.openai()
+reply = await client.chat.completions.create(
+    model="openai/gpt-4o", messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+The async Device interface provides `screenshot` (bytes), `tap`, `swipe`, `drag`, `input_text`,
+`press_button`, `press_key_code`, `start_app`, `list_apps`, `wait`, and `state`.
+`state.refresh()` returns `UIState` and `state.current` is a property returning the latest snapshot (raises
+`NotAvailableError` before the first refresh). UIState contains elements, formatted_text, focused_text, phone_state,
+screen_width, and screen_height. **The wording of `formatted_text` may change in a later version.**
+
+Declaring `tasks: Tasks` provides `await ctx.tasks.run(task, device=ctx.device, output=Model,
+max_steps=..., timeout=...)`. It runs a natural-language task on the context's device, spends
+normal task usage, and buys nothing. `device` must be the context's `Device`; any other object
+raises `NotAvailableError("tasks", "device is not the run's device")` before a call is made.
+`timeout` is in seconds (default 1800). The result is an `ExecutionResult[T]` (success, answer,
+typed output, steps, task_id, trajectory_path, device); an output that does not match `Model`
+sets `success` to false.
+
+```python
+class Login(BaseModel):
+    logged_in: bool
+
+result = await ctx.tasks.run("Check whether the user is logged in", device=ctx.device, output=Login)
+if not result.success or result.output is None:
+    ctx.log.warning("Could not determine the login state")
+```
+
+In the platform the task goes through the run's own task routes, which hand the run's device
+lease to the task and take it back when the task ends. Refusals surface as
+`NotAvailableError("tasks", code)` with the code `device_lease_not_held`, `tasks_not_declared`,
+`run_not_active` or `device_not_in_run`. With `--cloud` the public tasks API is used with your
+own key. Local execution without `--cloud` fails before `main` with
+`NotAvailableError("tasks", "needs --cloud")`. See `examples/bindings.py` for a full declaration.
+
+No ctx method buys, creates, or deletes resources. Tasks consume usage like any task.
+
+### Legacy Context
+
+
 | Member | Behaviour |
 | --- | --- |
 | `run.run_id` / `run.attempt` | Run identifier (`"local"`) and attempt number (`1`). |
@@ -230,17 +408,21 @@ partial result, and use `ctx.state` to carry data to the next run.
 | `run.device_target` | `cloud` (default) or `local`. |
 | `run.device_platform` | Optional local device platform: `android` or `ios`. |
 | `run.device_url` | Optional local Portal HTTP URL. |
+| `run.mailbox_id` | UUID of the run's existing mailbox, or `None`. |
+| `run.proxy` | `ProxyRef(kind, id)` of the run's existing proxy, or `None`. |
 | `log.info` / `log.warning` / `log.error` | One line on stderr per call. |
 | `log.status` | Replaces the file named by `MOBILERUN_FUNCTIONS_STATUS_FILE`; no-op if unset, best effort. |
 | `state.previous` / `state.previous_schema` | Prior saved JSON data and its schema number, or `None`. |
 | `state.save(data, schema=1)` | Copies a JSON value or model; requires `--state-file` in CLI runs. |
 | `dataset.push(item)` | Validates and emits an item for a dataset entry point; buffers without a file. |
 | `partial(reason)` | Marks a successful run incomplete; the last reason wins. |
-| `device()` | Connects once and returns the run's `mobilerun_core.Device`; see below. |
-| `credentials` / `files` / `llm` | Raise `NotAvailableError` in this version. |
+| `device()` | Deprecated: connects once and returns the run's `mobilerun_core.Device`; see below. |
+| `credentials` / `files` / `ai` | Legacy stubs raise `NotAvailableError`; declare `credentials` or `ai` in your `Ctx` to get the binding. |
 
 ### Control the device
 
+Existing scripts annotated `ctx: Context` keep `ctx.device()` unchanged in 0.2.0rc1.
+The first call per context emits one `DeprecationWarning` naming the new `Ctx` form.
 A run started with a device gives the script `ctx.device()`. It is synchronous and returns the
 `mobilerun-core` device of the run, connected once and reused on every call:
 
@@ -314,7 +496,7 @@ missing, it prints one line on stderr and exits 64. The starter passes `inspect`
 
 On success it prints one JSON object on stdout and exits 0:
 `{"ok": true, "entrypoint", "async", "inputSchema", "outputSchema", "outputKind", "datasetKey",
-"sdkVersion", "warnings"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the
+"sdkVersion", "requires", "warnings"}`. `outputKind` is `value`, `dataset` or `none`. `datasetKey` is the
 serialization name of the item field marked with `key_field()` for a `Dataset[Item]` output, else
 `null`. `warnings` is a list of issues (see below). A missing return annotation adds
 `return_annotation_missing`: no output is assumed. Annotate the function to make its intent clear.
@@ -390,10 +572,15 @@ exception as `import_failed` and exits 3.
 | `--attempt` | Attempt number; `1`. |
 | `--mode` | `live`, `dry_run`, `verification`; `live`. |
 | `--deadline` | ISO datetime, informational; absent by default. |
+| `--credentials-file` | Private local credentials YAML file. |
+| `--cloud` | Resolve bindings in the cloud with your API key. |
 | `--device-id` | Cloud UUID or local ADB serial. |
 | `--device-target` | `cloud` (default) or `local`. |
 | `--device-platform` | Local `android` (default) or `ios`; only with local target. |
 | `--device-url` | Local Portal HTTP URL; only with local target. |
+| `--mailbox-id` | UUID of the existing mailbox for a declared `Mailbox`. |
+| `--proxy-kind` | `connect` (or the reserved `byo`); paired with `--proxy-id`. |
+| `--proxy-id` | UUID of the existing proxy for a declared `Proxy`; paired with `--proxy-kind`. |
 
 Every failed run with exit 1 or 2 writes one summary line `error CODE: MESSAGE` to stderr,
 including field paths and error types for validation failures. The result file remains the
@@ -450,7 +637,7 @@ the script swallows the interruption or fails while cleaning up. It writes
 false}}` (plus the `dataset` counts when a dataset file is in use) and exits 1. Lines already
 pushed stay on disk; the file only ever holds complete lines, also after an interrupted write.
 `push` is safe to call from several threads. The deadline is informational; the platform
-enforces it. The package has no timeout or retry logic.
+enforces it. Resource bindings apply their own OTP and task timeouts; the runner itself has no deadline retry logic.
 
 ## Development
 

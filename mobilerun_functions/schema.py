@@ -11,7 +11,7 @@ from pydantic.json_schema import JsonSchemaMode
 from .dataset import KEY_MARKER
 
 REJECTED_KEYWORDS = ("pattern", "patternProperties", "prefixItems", "discriminator")
-# The `format` values the platform validates (with `ajv-formats`).
+# Supported scalar formats.
 ALLOWED_FORMATS = ("date-time", "date", "uuid", "uri", "email")
 # Keywords whose value is a map of name -> schema.
 _SCHEMA_MAPS = ("properties", "dependentSchemas")

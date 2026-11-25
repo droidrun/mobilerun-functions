@@ -13,7 +13,15 @@ from typing import NoReturn, get_args
 from ._check import Issue, issues_for
 from ._contract import inspect_entry
 from ._template import STARTER_SCRIPT
-from .context import DevicePlatform, DeviceTarget, RunInfo, RunMode
+from .context import (
+    DevicePlatform,
+    DeviceTarget,
+    ProxyKind,
+    ProxyRef,
+    RunInfo,
+    RunMode,
+    is_uuid,
+)
 from .errors import EntryPointError
 from .loader import ScriptImportError, load_script
 from .runner import (
@@ -29,6 +37,13 @@ from .schema import SchemaError
 MODES = get_args(RunMode)
 DEVICE_TARGETS = get_args(DeviceTarget)
 DEVICE_PLATFORMS = get_args(DevicePlatform)
+PROXY_KINDS = get_args(ProxyKind)
+
+
+def _uuid(value: str) -> str:
+    if not is_uuid(value):
+        raise argparse.ArgumentTypeError("must be a UUID")
+    return value
 
 
 class _Parser(argparse.ArgumentParser):
@@ -53,6 +68,8 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("path")
     run_p.add_argument("--input-file", required=True)
     run_p.add_argument("--result-file", required=True)
+    run_p.add_argument("--cloud", action="store_true", help="resolve bindings with your cloud key")
+    run_p.add_argument("--credentials-file", help="private local credentials YAML file")
     run_p.add_argument("--state-file")
     run_p.add_argument("--dataset-file")
     run_p.add_argument("--run-id", default="local")
@@ -71,6 +88,9 @@ def _parser() -> argparse.ArgumentParser:
         help="local device platform (default: android); ios uses its Portal",
     )
     run_p.add_argument("--device-url", help="Portal HTTP URL of a local device")
+    run_p.add_argument("--mailbox-id", type=_uuid, help="existing mailbox UUID for ctx.mailbox")
+    run_p.add_argument("--proxy-kind", choices=PROXY_KINDS, help="kind of the existing proxy")
+    run_p.add_argument("--proxy-id", type=_uuid, help="existing proxy UUID; needs --proxy-kind")
     run_p.add_argument("--deadline", type=datetime.fromisoformat)
     return parser
 
@@ -131,6 +151,10 @@ def _invalid_device_flags(args: argparse.Namespace) -> bool:
 def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if _invalid_device_flags(args):
         parser.error("--device-platform and --device-url need --device-target local")
+    half_proxy = (args.proxy_kind is None) != (args.proxy_id is None)
+    if half_proxy:
+        parser.error("--proxy-kind and --proxy-id must be given together")
+    proxy = ProxyRef(args.proxy_kind, args.proxy_id) if args.proxy_kind else None
     info = RunInfo(
         run_id=args.run_id,
         attempt=args.attempt,
@@ -140,6 +164,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         device_target=args.device_target,
         device_platform=args.device_platform,
         device_url=args.device_url,
+        mailbox_id=args.mailbox_id,
+        proxy=proxy,
     )
     opts = RunOptions(
         path=args.path,
@@ -148,6 +174,8 @@ def _run(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         run_info=info,
         state_file=args.state_file,
         dataset_file=args.dataset_file,
+        cloud=args.cloud,
+        credentials_file=args.credentials_file,
     )
     try:
         return run(opts)

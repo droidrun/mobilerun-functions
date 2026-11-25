@@ -39,11 +39,12 @@ def connect_device(
     target: DeviceTarget = "cloud",
     platform: DevicePlatform | None = None,
     url: str | None = None,
+    connection: tuple[str | None, str | None] | None = None,
 ) -> Device:
     """Connect to the run's device and return the `mobilerun_core` device unchanged."""
     if target == "local":
         return _connect_local(device_id, platform, url)
-    return _connect_cloud(device_id)
+    return _connect_cloud(device_id, connection=connection)
 
 
 def _local_backend(platform: str | None, url: str | None) -> str:
@@ -68,7 +69,16 @@ def _connect_local(device_id: str | None, platform: str | None, url: str | None)
         raise _missing(f"is not available: {' '.join(str(exc).split())}") from None
 
 
-def _connect_cloud(device_id: str | None) -> Device:
+def _cloud_connection() -> tuple[str | None, str | None]:
+    return (
+        os.environ.get(API_BASE_URL_ENV) or os.environ.get(LEGACY_API_BASE_URL_ENV),
+        os.environ.get(API_KEY_ENV) or os.environ.get(LEGACY_API_KEY_ENV),
+    )
+
+
+def _connect_cloud(
+    device_id: str | None, *, connection: tuple[str | None, str | None] | None = None
+) -> Device:
     if not device_id:
         raise _missing("is not available: this run has no device")
     try:
@@ -78,8 +88,9 @@ def _connect_cloud(device_id: str | None) -> Device:
             "is not available: mobilerun-core is not installed "
             "(install mobilerun-functions[device])"
         ) from None
-    base_url = os.environ.get(API_BASE_URL_ENV) or os.environ.get(LEGACY_API_BASE_URL_ENV)
-    api_key = os.environ.get(API_KEY_ENV) or os.environ.get(LEGACY_API_KEY_ENV)
+    if connection is None:
+        connection = _cloud_connection()
+    base_url, api_key = connection
     absent = [
         name for name, value in ((API_BASE_URL_ENV, base_url), (API_KEY_ENV, api_key)) if not value
     ]
