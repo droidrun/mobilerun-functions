@@ -16,7 +16,7 @@ from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import CloudTasks, RunTasks
 from ._connection import Connection
 from .bindings import AI, Credentials, Mailbox, Proxy, Tasks
-from .context import Context, DeviceTarget, RunInfo
+from .context import Context, DeviceTarget, RunInfo, is_uuid
 from .device import connect_device
 from .entry import EntryPoint
 from .errors import NotAvailableError
@@ -32,7 +32,7 @@ async def call_bound(
     credentials_file: str | None,
 ) -> Any:
     async with AsyncExitStack() as stack:
-        await _resolve(entry, model_input, ctx, connection, credentials_file, stack)
+        await _resolve(entry, ctx, connection, credentials_file, stack)
         if entry.is_async:
             return await entry.func(model_input, ctx)
         return await asyncio.to_thread(entry.func, model_input, ctx)
@@ -40,21 +40,12 @@ async def call_bound(
 
 async def _resolve(
     entry: EntryPoint,
-    model_input: BaseModel,
     ctx: Context,
     connection: Connection,
     credentials_file: str | None,
     stack: AsyncExitStack,
 ) -> None:
-    interfaces = {item.interface for item in entry.bindings}
-    local_tasks = Tasks in interfaces and not connection.cloud
-    if local_tasks:
-        raise NotAvailableError("tasks", LOCAL_TASKS_REASON)
-    local_proxy = Proxy in interfaces and not _cloud_device(ctx.run, connection)
-    if local_proxy:
-        raise NotAvailableError(
-            "proxy", "needs a cloud device (use --cloud or --device-target cloud)"
-        )
+    _check_local(entry, ctx, connection)
     client: Any = None
     device = None
     credential_file: list[Credential] | None = None
@@ -84,15 +75,16 @@ async def _resolve(
                     credentials = credential_file
                 value: Any = CredentialsAdapter(credentials, item.options.package)
             elif item.interface is Mailbox:
-                mailbox_id = getattr(model_input, item.options.input or "")
+                mailbox_id = ctx.run.mailbox_id
+                assert mailbox_id is not None
                 response = await client.mailboxes.retrieve(mailbox_id)
                 value = MailboxAdapter(client, mailbox_id, response.data.address)
             elif item.interface is Proxy:
-                if not ctx.run.device_id:
-                    raise NotAvailableError("proxy", "this run has no device")
-                proxy_id = getattr(model_input, item.options.input or "")
-                await client.devices.proxy.connect(ctx.run.device_id, connect={"id": proxy_id})
-                value = ProxyAdapter(client, ctx.run.device_id)
+                proxy = ctx.run.proxy
+                device_id = ctx.run.device_id
+                assert proxy is not None and device_id is not None
+                await client.devices.proxy.connect(device_id, connect={"id": proxy.id})
+                value = ProxyAdapter(client, device_id)
             elif item.interface is Tasks:
                 continue  # Built below: it needs the device binding.
             elif item.interface is AI:
@@ -116,6 +108,33 @@ async def _resolve(
         if item.interface is Tasks:
             assert device is not None
             setattr(ctx, item.name, _tasks(client, device, ctx.run, connection))
+
+
+def _check_local(entry: EntryPoint, ctx: Context, connection: Connection) -> None:
+    """Refuse a binding the run cannot satisfy before any remote call, whatever the order."""
+    run = ctx.run
+    for item in entry.bindings:
+        name = item.name
+        if item.interface is Tasks and not connection.cloud:
+            raise NotAvailableError(name, LOCAL_TASKS_REASON)
+        if item.interface is Mailbox:
+            if run.mailbox_id is None:
+                raise NotAvailableError(name, "this run has no mailbox")
+            if not is_uuid(run.mailbox_id):
+                raise NotAvailableError(name, "has an invalid mailbox id")
+        if item.interface is Proxy:
+            if run.proxy is None:
+                raise NotAvailableError(name, "this run has no proxy")
+            if run.proxy.kind != "connect":
+                raise NotAvailableError(name, "supports only connect proxies")
+            if not is_uuid(run.proxy.id):
+                raise NotAvailableError(name, "has an invalid proxy id")
+            if not _cloud_device(run, connection):
+                raise NotAvailableError(
+                    name, "needs a cloud device (use --cloud or --device-target cloud)"
+                )
+            if not run.device_id:
+                raise NotAvailableError(name, "this run has no device")
 
 
 def _tasks(client: Any, device: DeviceAdapter, run: RunInfo, connection: Connection) -> Any:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import warnings
 from dataclasses import dataclass
@@ -33,7 +34,22 @@ LEGACY_DEVICE_WARNING = (
 RunMode = Literal["live", "dry_run", "verification"]
 DeviceTarget = Literal["local", "cloud"]
 DevicePlatform = Literal["android", "ios"]
+ProxyKind = Literal["connect", "byo"]
+_UUID = re.compile(r"[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}")
 _STRICT_INT: TypeAdapter[int] = TypeAdapter(StrictInt)
+
+
+def is_uuid(value: object) -> bool:
+    """True for a UUID in its canonical 8-4-4-4-12 spelling, with no surrounding text."""
+    return isinstance(value, str) and _UUID.fullmatch(value) is not None
+
+
+@dataclass(frozen=True)
+class ProxyRef:
+    """An existing proxy selected for the run; `byo` is reserved and refused at resolution."""
+
+    kind: ProxyKind
+    id: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +62,8 @@ class RunInfo:
     device_target: DeviceTarget = "cloud"
     device_platform: DevicePlatform | None = None
     device_url: str | None = None
+    mailbox_id: str | None = None
+    proxy: ProxyRef | None = None
 
 
 class Log:

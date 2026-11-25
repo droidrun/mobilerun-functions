@@ -140,7 +140,7 @@ def _build(func: Any) -> EntryPoint:
 
         context_model = ctx_type
 
-    bindings = declarations(context_model, input_model)
+    bindings = declarations(context_model)
     output_model = _output_model(hints)
     return EntryPoint(
         func=func,

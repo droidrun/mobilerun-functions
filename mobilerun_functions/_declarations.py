@@ -5,12 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, get_type_hints
 
-from pydantic import BaseModel
-
 from .bindings import AI, Binding, Credentials, Device, Mailbox, Proxy, Tasks
 from .context import _BINDING_OVERRIDES, Context, RunInfo
 from .errors import EntryPointError
-from .schema import MAILBOX_FORMAT, PROXY_FORMAT
 
 _RESERVED_CONTEXT_MEMBERS = (
     vars(Context).keys() | vars(Context(RunInfo())).keys()
@@ -30,7 +27,7 @@ class Declaration:
     options: Binding
 
 
-def declarations(ctx: type[Context], input_model: type[BaseModel]) -> tuple[Declaration, ...]:
+def declarations(ctx: type[Context]) -> tuple[Declaration, ...]:
     if ctx is Context:
         return ()
     try:
@@ -51,7 +48,7 @@ def declarations(ctx: type[Context], input_model: type[BaseModel]) -> tuple[Decl
         duplicate_resource = interface in seen and interface is not Credentials
         if duplicate_resource:
             raise EntryPointError(f"{name}: at most one {interface.__name__} binding is allowed")
-        _validate_options(name, interface, default, input_model)
+        _validate_options(name, interface, default)
         if interface is Credentials:
             assert default.package is not None
             if default.package in packages:
@@ -68,34 +65,12 @@ def declarations(ctx: type[Context], input_model: type[BaseModel]) -> tuple[Decl
     return tuple(result)
 
 
-def _validate_options(
-    name: str, interface: type, options: Binding, input_model: type[BaseModel]
-) -> None:
+def _validate_options(name: str, interface: type, options: Binding) -> None:
     if interface is Credentials:
-        valid = isinstance(options.package, str) and bool(options.package) and options.input is None
-        if not valid:
+        if not (isinstance(options.package, str) and options.package):
             raise EntryPointError(f'{name}: Credentials requires binding(package="...")')
         return
-    if interface in (Mailbox, Proxy):
-        format_name = MAILBOX_FORMAT if interface is Mailbox else PROXY_FORMAT
-        input_name = options.input if isinstance(options.input, str) else ""
-        model_field = input_model.model_fields.get(input_name)
-        extra = model_field.json_schema_extra if model_field else None
-        valid = (
-            options.package is None
-            and model_field is not None
-            and model_field.annotation is str
-            and isinstance(extra, dict)
-            and extra.get("format") == format_name
-        )
-        if not valid:
-            raise EntryPointError(
-                f'{name}: requires binding(input="...") linking a str Input field '
-                f'with format "{format_name}"'
-            )
-        return
-    has_options = options.package is not None or options.input is not None
-    if has_options:
+    if options.package is not None:
         raise EntryPointError(f"{name}: {interface.__name__} accepts only binding()")
 
 

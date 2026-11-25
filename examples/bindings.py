@@ -1,6 +1,6 @@
-"""Existing resources only. Supply mailbox_id and proxy_id through the input JSON."""
+"""Existing resources only. The run selects them: --mailbox-id, --proxy-kind and --proxy-id."""
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from mobilerun_functions import (
     AI,
@@ -16,8 +16,6 @@ from mobilerun_functions import (
 
 
 class Input(BaseModel):
-    mailbox_id: str = Field(json_schema_extra={"format": "mobilerun-mailbox"})
-    proxy_id: str = Field(json_schema_extra={"format": "mobilerun-proxy"})
     package: str = "com.example.app"
 
 
@@ -32,8 +30,8 @@ class Confirmation(BaseModel):
 class Ctx(Context):
     device: Device
     credentials: Credentials = binding(package="com.example.app")
-    mailbox: Mailbox = binding(input="mailbox_id")
-    proxy: Proxy = binding(input="proxy_id")
+    mailbox: Mailbox
+    proxy: Proxy
     tasks: Tasks
     ai: AI
 

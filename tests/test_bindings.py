@@ -5,14 +5,14 @@ import json
 import pytest
 
 PRELUDE = '''
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from mobilerun_functions import (
     Context, Credentials, Device, AI, Mailbox, Proxy, Tasks, binding, script,
 )
 
 class Input(BaseModel):
-    mailbox_id: str = Field(default="mailbox-1", json_schema_extra={"format": "mobilerun-mailbox"})
-    proxy_id: str = Field(default="proxy-1", json_schema_extra={"format": "mobilerun-proxy"})
+    mailbox_id: str = "business-value"
+    proxy_id: str = "business-value"
 '''
 
 
@@ -23,12 +23,12 @@ def source(fields, body="pass", *, before=""):
     )
 
 
-def test_inspect_bindings_requires_and_input_formats(inspect_source):
+def test_inspect_bindings_requires_and_keeps_business_input(inspect_source):
     code, out, err = inspect_source(source(
         'phone: Device\ntasks: Tasks = binding()\n'
         'netflix: Credentials = binding(package="com.netflix.mediaclient")\n'
         'gmail: Credentials = binding(package="com.google.android.gm")\n'
-        'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")\n'
+        'email: Mailbox\nproxy: Proxy\n'
         'ai: AI'
     ))
     assert code == 0, err
@@ -41,8 +41,19 @@ def test_inspect_bindings_requires_and_input_formats(inspect_source):
         "tasks": True,
         "ai": True,
     }
-    assert document["inputSchema"]["properties"]["mailbox_id"]["format"] == "mobilerun-mailbox"
-    assert document["inputSchema"]["properties"]["proxy_id"]["format"] == "mobilerun-proxy"
+    assert set(document["inputSchema"]["properties"]) == {"mailbox_id", "proxy_id"}
+    assert "format" not in document["inputSchema"]["properties"]["mailbox_id"]
+    assert "format" not in document["inputSchema"]["properties"]["proxy_id"]
+
+
+def test_optionless_binding_equals_bare_annotation(inspect_source):
+    code, bare, err = inspect_source(source("phone: Device\nemail: Mailbox\nproxy: Proxy"))
+    assert code == 0, err
+    code, explicit, err = inspect_source(source(
+        "phone: Device = binding()\nemail: Mailbox = binding()\nproxy: Proxy = binding()"
+    ))
+    assert code == 0, err
+    assert json.loads(bare)["requires"] == json.loads(explicit)["requires"]
 
 
 @pytest.mark.parametrize("signature", ["input: Input", "input: Input, ctx: Context"])
@@ -74,27 +85,20 @@ def test_inspect_rejects_implementations_and_other_types(inspect_source, field):
 @pytest.mark.parametrize("fields,message", [
     ("phone: Device\nsecond: Device", "at most one Device"),
     ("phone: Device\na: Tasks\nb: Tasks", "at most one Tasks"),
-    ('a: Mailbox = binding(input="mailbox_id")\nb: Mailbox = binding(input="mailbox_id")',
-     "at most one Mailbox"),
-    ('a: Proxy = binding(input="proxy_id")\nb: Proxy = binding(input="proxy_id")',
-     "at most one Proxy"),
+    ("a: Mailbox\nb: Mailbox", "at most one Mailbox"),
+    ("phone: Device\na: Proxy\nb: Proxy", "at most one Proxy"),
     ("a: AI\nb: AI", "at most one AI"),
     ("ai: AI = binding(package='pkg')", "accepts only binding()"),
-    ('ai: AI = binding(input="mailbox_id")', "accepts only binding()"),
+    ("email: Mailbox = binding(package='pkg')", "email: Mailbox accepts only binding()"),
+    ("phone: Device\nproxy: Proxy = binding(package='pkg')", "proxy: Proxy accepts only binding()"),
     ("tasks: Tasks", "tasks: requires a Device binding"),
     ("vault: Credentials", 'Credentials requires binding(package="...")'),
     ('a: Credentials = binding(package="pkg")\nb: Credentials = binding(package="pkg")',
      "credential packages must be distinct"),
     ('phone: Device = binding(package="pkg")', "accepts only binding()"),
-    ("phone: Device\ntasks: Tasks = binding(input='proxy_id')", "accepts only binding()"),
     ('phone: Device\ntasks: Tasks = "cloud"', "tasks: the implementation belongs"),
-    ('proxy: Proxy = binding(input="proxy_id")', "proxy: requires a Device binding"),
-    ('email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")',
-     "proxy: requires a Device binding"),
-    ("email: Mailbox", "requires binding"),
-    ('proxy: Proxy = binding(input="absent")', "requires binding"),
-    ('email: Mailbox = binding(input="proxy_id")', 'format "mobilerun-mailbox"'),
-    ('proxy: Proxy = binding(input="mailbox_id")', 'format "mobilerun-proxy"'),
+    ("proxy: Proxy", "proxy: requires a Device binding"),
+    ("email: Mailbox\nproxy: Proxy", "proxy: requires a Device binding"),
 ])
 def test_invalid_declarations_fail_at_inspect_and_run(inspect_source, run_script, fields, message):
     script = source(fields)
@@ -108,15 +112,26 @@ def test_invalid_declarations_fail_at_inspect_and_run(inspect_source, run_script
     assert result.err == err
 
 
-@pytest.mark.parametrize("field_type", ["int", "str | None"])
-def test_linked_input_must_be_exactly_str(inspect_source, field_type):
-    script = source('email: Mailbox = binding(input="mailbox_id")').replace(
-        'mailbox_id: str = Field(default="mailbox-1",',
-        f'mailbox_id: {field_type} = Field(default=None,',
-    )
-    code, out, _ = inspect_source(script)
+@pytest.mark.parametrize("field", [
+    'email: Mailbox = binding(input="mailbox_id")',
+    'phone: Device\nproxy: Proxy = binding(input="proxy_id")',
+    'phone: Device = binding(input="x")',
+])
+def test_input_bound_declarations_are_refused_at_inspect_and_run(inspect_source, run_script, field):
+    script = source(field, 'raise AssertionError("main was called")')
+    code, out, err = inspect_source(script)
     assert code == 3
-    assert 'format "mobilerun-mailbox"' in json.loads(out)["error"]["message"]
+    assert "unexpected keyword argument 'input'" in json.loads(out)["error"]["message"]
+    result = run_script(script)
+    assert result.code == 1
+    assert "unexpected keyword argument 'input'" in result.envelope["error"]["message"]
+    assert "main was called" not in result.err
+
+
+def test_business_fields_named_like_resources_stay_in_the_schema(inspect_source):
+    code, out, err = inspect_source(source("email: Mailbox"))
+    assert code == 0, err
+    assert set(json.loads(out)["inputSchema"]["properties"]) == {"mailbox_id", "proxy_id"}
 
 
 def test_subclass_inherits_declarations(inspect_source):

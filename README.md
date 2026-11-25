@@ -229,18 +229,17 @@ cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, `Tasks`, and `AI` are struct
 Protocols. The temporary adapters will be replaced by the framework factory.
 
 ```python
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from mobilerun_functions import Context, Device, Credentials, AI, Mailbox, Proxy, Tasks, binding, script
 
 class Input(BaseModel):
-    mailbox_id: str = Field(json_schema_extra={"format": "mobilerun-mailbox"})
-    proxy_id: str = Field(json_schema_extra={"format": "mobilerun-proxy"})
+    package: str = "com.example.app"
 
 class Ctx(Context):
     device: Device
     account: Credentials = binding(package="com.example.app")
-    email: Mailbox = binding(input="mailbox_id")
-    proxy: Proxy = binding(input="proxy_id")
+    email: Mailbox
+    proxy: Proxy
     tasks: Tasks
     ai: AI
 
@@ -251,12 +250,15 @@ async def main(input: Input, ctx: Ctx) -> None:
 ```
 
 Install `mobilerun-functions[device]` for cloud resources; add `[local]` for local device
-backends. `Device` and `Tasks` need no default, or `binding()`. Credentials require
+backends. `Device`, `Mailbox`, `Proxy` and `Tasks` need no default, or `binding()`; they accept no
+options. Credentials require
 `binding(package="...")`; without it `inspect` fails. Each credentials binding is bound to its
 package, and several bindings may declare distinct packages. A `Proxy` binding requires a
-`Device` binding, as `Tasks` does. Mailbox and proxy
-bindings each link to a `str` Input field with the corresponding `format` shown above; the
-input value is the id of an existing resource. At most one of each other interface is allowed.
+`Device` binding, as `Tasks` does. `Mailbox` and `Proxy` are run resources: a bare annotation
+only declares the need, and the Input model stays pure business input. The run selects the
+existing resource (see below), never the input; a field named `mailbox_id` in your Input is
+an ordinary business field and is not read. `binding(input=...)` and package options on
+`Mailbox` or `Proxy` are refused. At most one of each other interface is allowed.
 `Tasks` requires the `Device` binding (there is one device in the context). A concrete
 implementation, other field type, or concrete instance in `Ctx` fails `inspect` with
 “the implementation belongs in the local configuration”.
@@ -286,11 +288,17 @@ python -m mobilerun_functions run function.py --input-file in.json --result-file
   --device-target local --device-id emulator-5554 --credentials-file credentials.yaml
 
 # Mailbox-only function, with MOBILERUN_API_KEY already set in the environment
-python -m mobilerun_functions run mailbox_only.py --input-file in.json --result-file out.json
+python -m mobilerun_functions run mailbox_only.py --input-file in.json --result-file out.json \
+  --mailbox-id MAILBOX_UUID
 
 # Same file, cloud resources with your own key already set in the environment
 python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
   --cloud --device-id YOUR_EXISTING_DEVICE_ID
+
+# Existing cloud mailbox and Connect proxy (this process drives existing cloud resources)
+python -m mobilerun_functions run function.py --input-file in.json --result-file out.json \
+  --cloud --device-id DEVICE_UUID --mailbox-id MAILBOX_UUID \
+  --proxy-kind connect --proxy-id CONNECT_UUID
 ```
 
 The credentials file uses the framework's YAML format, package → name → fields. A flat
@@ -315,7 +323,12 @@ package); other packages' values never enter the run. Driver failures while typi
 credentials are reported without the value. Never put credential values in input JSON or log
 them.
 
-Mailbox access always uses the cloud SDK, also for a local device, and needs
+The run selects the resources: `ctx.run.mailbox_id` (a UUID or `None`) and `ctx.run.proxy`
+(a `ProxyRef(kind, id)` or `None`; `kind` is `"connect"` or the reserved `"byo"`), set by
+`--mailbox-id` and the paired `--proxy-kind`/`--proxy-id`. A half pair, an unknown kind or an
+invalid UUID is a usage error before `main`. A declared `Mailbox` or `Proxy` without its
+selection, a `byo` proxy and a proxy without a cloud device fail before `main` and before any
+remote call, whatever the declaration order. Mailbox access always uses the cloud SDK, also for a local device, and needs
 `MOBILERUN_API_KEY` (or its legacy name); the base URL defaults as above. `address` is the
 resolved address;
 `await mailbox.wait_for_code(sender=None, timeout=60, after=None)` polls for an OTP while
@@ -323,7 +336,7 @@ preserving leading zeros. Only a code received after the wait began (UTC), or af
 when you pass it, is returned. No code yet (204) keeps polling; an unknown mailbox (404), a
 conflict (409) or an auth error fails at once, and `timeout` raises `TimeoutError`.
 Proxy resolution requires a cloud device (`--cloud` or
-`--device-target cloud`) and connects the supplied existing proxy to the run's `--device-id` through the device proxy endpoint and **leaves it connected** after the run.
+`--device-target cloud`) and a `connect` proxy: it connects the selected existing proxy to the run's `--device-id` through the device proxy endpoint, exactly once and before `main`, and **leaves it connected** after the run.
 No resource is bought, created, or deleted during resolution.
 
 Declaring `ai: AI` (`binding()` only, at most one) gives an OpenAI-compatible client for the
@@ -387,6 +400,8 @@ No ctx method buys, creates, or deletes resources. Tasks consume usage like any 
 | `run.device_target` | `cloud` (default) or `local`. |
 | `run.device_platform` | Optional local device platform: `android` or `ios`. |
 | `run.device_url` | Optional local Portal HTTP URL. |
+| `run.mailbox_id` | UUID of the run's existing mailbox, or `None`. |
+| `run.proxy` | `ProxyRef(kind, id)` of the run's existing proxy, or `None`. |
 | `log.info` / `log.warning` / `log.error` | One line on stderr per call. |
 | `log.status` | Replaces the file named by `MOBILERUN_FUNCTIONS_STATUS_FILE`; no-op if unset, best effort. |
 | `state.previous` / `state.previous_schema` | Prior saved JSON data and its schema number, or `None`. |
@@ -523,7 +538,7 @@ that only read `error.code` and `error.message` keep working. stderr gets one li
 The schemas are limited to a subset the platform can validate. `pattern`, `patternProperties`,
 `prefixItems`, `discriminator` and recursive models are rejected, and so is any `format` outside this list:
 
-`date-time`, `date`, `uuid`, `uri`, `email`, `mobilerun-mailbox`, `mobilerun-proxy`
+`date-time`, `date`, `uuid`, `uri`, `email`
 
 That covers `datetime`, `date`, `UUID`, `AnyUrl`/`HttpUrl` and, for `email`, a `str` field with
 `Field(json_schema_extra={"format": "email"})`. `run` still validates the input with the
@@ -555,6 +570,9 @@ exception as `import_failed` and exits 3.
 | `--device-target` | `cloud` (default) or `local`. |
 | `--device-platform` | Local `android` (default) or `ios`; only with local target. |
 | `--device-url` | Local Portal HTTP URL; only with local target. |
+| `--mailbox-id` | UUID of the existing mailbox for a declared `Mailbox`. |
+| `--proxy-kind` | `connect` (or the reserved `byo`); paired with `--proxy-id`. |
+| `--proxy-id` | UUID of the existing proxy for a declared `Proxy`; paired with `--proxy-kind`. |
 
 Every failed run with exit 1 or 2 writes one summary line `error CODE: MESSAGE` to stderr,
 including field paths and error types for validation failures. The result file remains the

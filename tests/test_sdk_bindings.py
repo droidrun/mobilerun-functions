@@ -51,6 +51,12 @@ def core(monkeypatch):
     return core
 
 
+MAILBOX_ID = "0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8"
+PROXY_ID = "7a6b5c4d-3e2f-4a10-9b8c-7d6e5f4a3b2c"
+MAILBOX_ARGS = ["--mailbox-id", MAILBOX_ID]
+PROXY_ARGS = ["--proxy-kind", "connect", "--proxy-id", PROXY_ID]
+
+
 def package_list(items):
     return {"data": items}
 
@@ -205,13 +211,13 @@ def test_local_mailbox_reads_address_and_waits_for_otp(sdk, run_script):
         }}),
     ])
     result = run_script(source(
-        'email: Mailbox = binding(input="mailbox_id")',
+        'email: Mailbox',
         'print(ctx.email.address, await ctx.email.wait_for_code(sender="sender@example.test"))',
-    ))
+    ), extra_args=MAILBOX_ARGS)
     assert result.code == 0, result.err
     assert result.out == "example@example.test 001234\n"
     assert [(request.method, request.url.path) for request in requests] == [
-        ("GET", "/v1/mailboxes/mailbox-1"), ("GET", "/v1/mailboxes/mailbox-1/otp"),
+        ("GET", f"/v1/mailboxes/{MAILBOX_ID}"), ("GET", f"/v1/mailboxes/{MAILBOX_ID}/otp"),
     ]
     assert requests[1].url.params["sender"] == "sender@example.test"
     baseline = datetime.fromisoformat(requests[1].url.params["after"])
@@ -223,7 +229,7 @@ def test_local_mailbox_without_key_fails_before_main(sdk, monkeypatch, run_scrip
     _, requests = sdk
     monkeypatch.delenv("MOBILERUN_API_KEY")
     monkeypatch.setitem(sys.modules, "mobilerun_sdk", None)
-    result = run_script(source('email: Mailbox = binding(input="mailbox_id")', 'print("MAIN")'))
+    result = run_script(source('email: Mailbox', 'print("MAIN")'), extra_args=MAILBOX_ARGS)
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
         "NotAvailableError: ctx.email set MOBILERUN_API_KEY"
@@ -236,9 +242,9 @@ def test_proxy_connects_existing_id_only_and_leaves_it_connected(sdk, core, run_
     responses, requests = sdk
     responses.extend([(204, None), (200, {"connected": True})])
     result = run_script(source(
-        'device: Device\nproxy: Proxy = binding(input="proxy_id")',
+        'device: Device\nproxy: Proxy',
         'print(await ctx.proxy.status())',
-    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    ), extra_args=["--cloud", "--device-id", "dev-1", *PROXY_ARGS])
     assert result.code == 0, result.err
     assert result.out == (
         "{'connected': True, 'name': None, 'protocol': None, '$schema': None}\n"
@@ -246,7 +252,7 @@ def test_proxy_connects_existing_id_only_and_leaves_it_connected(sdk, core, run_
     assert [(request.method, request.url.path) for request in requests] == [
         ("POST", "/v1/devices/dev-1/proxy"), ("GET", "/v1/devices/dev-1/proxy"),
     ]
-    assert json.loads(requests[0].content) == {"connect": {"id": "proxy-1"}}
+    assert json.loads(requests[0].content) == {"connect": {"id": PROXY_ID}}
     assert not responses
 
 
@@ -256,10 +262,9 @@ def test_cloud_flag_defaults_to_public_base_and_legacy_key(sdk, monkeypatch, run
     monkeypatch.delenv("MOBILERUN_API_KEY")
     monkeypatch.setenv("MOBILERUN_CLOUD_API_KEY", "legacy-test-key")
     responses.append((200, {"data": {"address": None}}))
-    result = run_script(source('email: Mailbox = binding(input="mailbox_id")'),
-                        extra_args=["--cloud"])
+    result = run_script(source('email: Mailbox'), extra_args=["--cloud", *MAILBOX_ARGS])
     assert result.code == 0, result.err
-    assert str(requests[0].url) == "https://api.mobilerun.ai/v1/mailboxes/mailbox-1"
+    assert str(requests[0].url) == f"https://api.mobilerun.ai/v1/mailboxes/{MAILBOX_ID}"
     assert requests[0].headers["authorization"] == "Bearer legacy-test-key"
 
 
@@ -364,14 +369,16 @@ def test_mailbox_polls_after_no_code_and_forwards_after(sdk, monkeypatch, run_sc
     pause = AsyncMock()
     monkeypatch.setattr(asyncio, "sleep", pause)
     result = run_script(source(
-        'email: Mailbox = binding(input="mailbox_id")',
+        'email: Mailbox',
         'print(await ctx.email.wait_for_code(after=datetime(2026, 11, 24, tzinfo=UTC)))',
         before="\nfrom datetime import UTC, datetime\n",
-    ))
+    ), extra_args=MAILBOX_ARGS)
     assert result.code == 0, result.err
     assert result.out == "0007\n"
     assert [request.url.path for request in requests] == [
-        "/v1/mailboxes/mailbox-1", "/v1/mailboxes/mailbox-1/otp", "/v1/mailboxes/mailbox-1/otp",
+        f"/v1/mailboxes/{MAILBOX_ID}",
+        f"/v1/mailboxes/{MAILBOX_ID}/otp",
+        f"/v1/mailboxes/{MAILBOX_ID}/otp",
     ]
     assert requests[2].url.params["after"] == "2026-11-24T00:00:00+00:00"
     pause.assert_awaited_once_with(2.0)
@@ -510,7 +517,7 @@ def test_task_polls_through_running_until_terminal(sdk, core, monkeypatch, run_s
 def test_binding_api_status_error_names_field_without_body(sdk, run_script, status):
     responses, requests = sdk
     responses.append((status, {"detail": "vault-secret"}))
-    result = run_script(source('inbox: Mailbox = binding(input="mailbox_id")', 'print("MAIN")'))
+    result = run_script(source('inbox: Mailbox', 'print("MAIN")'), extra_args=MAILBOX_ARGS)
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
         f"NotAvailableError: ctx.inbox API returned {status}"
@@ -523,7 +530,7 @@ def test_binding_api_status_error_names_field_without_body(sdk, run_script, stat
 def test_missing_sdk_names_binding_and_install_extra(sdk, monkeypatch, run_script):
     _, requests = sdk
     monkeypatch.setitem(sys.modules, "mobilerun_sdk", None)
-    result = run_script(source('inbox: Mailbox = binding(input="mailbox_id")'))
+    result = run_script(source('inbox: Mailbox'), extra_args=MAILBOX_ARGS)
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
         "NotAvailableError: ctx.inbox install mobilerun-functions[device]"
@@ -536,10 +543,12 @@ def test_local_proxy_fails_before_building_any_client(sdk, monkeypatch, run_scri
     built = []
     monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: built.append(kw))
     result = run_script(source(
-        'device: Device\nemail: Mailbox = binding(input="mailbox_id")\n'
-        'proxy: Proxy = binding(input="proxy_id")',
+        'device: Device\nemail: Mailbox\n'
+        'proxy: Proxy',
         'print("MAIN")',
-    ), extra_args=["--device-target", "local", "--device-id", "emulator-5554"])
+    ), extra_args=[
+        "--device-target", "local", "--device-id", "emulator-5554", *MAILBOX_ARGS, *PROXY_ARGS,
+    ])
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
         "NotAvailableError: ctx.proxy needs a cloud device (use --cloud or --device-target cloud)"
@@ -552,9 +561,9 @@ def test_local_mailbox_defaults_to_public_api(sdk, monkeypatch, run_script):
     responses, requests = sdk
     monkeypatch.delenv("MOBILERUN_BASE_URL")
     responses.append((200, {"data": {"address": None}}))
-    result = run_script(source('email: Mailbox = binding(input="mailbox_id")'))
+    result = run_script(source('email: Mailbox'), extra_args=MAILBOX_ARGS)
     assert result.code == 0, result.err
-    assert str(requests[0].url) == "https://api.mobilerun.ai/v1/mailboxes/mailbox-1"
+    assert str(requests[0].url) == f"https://api.mobilerun.ai/v1/mailboxes/{MAILBOX_ID}"
 
 
 def test_task_deadline_starts_after_creation_returns():
@@ -922,3 +931,119 @@ def test_old_name_is_gone(sdk, run_script):
     ai = run_script(source("ai: AI", AI_SCRIPT))
     assert f"/v1/{old}" not in ai.out
     assert "/v1/ai" in ai.out
+
+
+def test_resources_come_from_the_run_not_from_input(sdk, core, run_script):
+    responses, requests = sdk
+    decoy = "11111111-2222-4333-8444-555555555555"
+    responses.extend([(200, {"data": {"address": None}}), (204, None)])
+    result = run_script(
+        source("device: Device\nemail: Mailbox\nproxy: Proxy", 'print("MAIN")'),
+        {"mailbox_id": decoy, "proxy_id": decoy},
+        extra_args=["--cloud", "--device-id", "dev-1", *MAILBOX_ARGS, *PROXY_ARGS],
+    )
+    assert result.code == 0, result.err
+    assert [request.url.path for request in requests] == [
+        f"/v1/mailboxes/{MAILBOX_ID}", "/v1/devices/dev-1/proxy",
+    ]
+    assert json.loads(requests[1].content) == {"connect": {"id": PROXY_ID}}
+    assert decoy not in "".join(str(request.url) + request.content.decode() for request in requests)
+
+
+@pytest.mark.parametrize("args,declared,message", [
+    ([], "email: Mailbox", "ctx.email this run has no mailbox"),
+    ([*PROXY_ARGS], "email: Mailbox", "ctx.email this run has no mailbox"),
+    (MAILBOX_ARGS, "device: Device\nproxy: Proxy", "ctx.proxy this run has no proxy"),
+    (
+        ["--proxy-kind", "byo", "--proxy-id", PROXY_ID],
+        "device: Device\nproxy: Proxy",
+        "ctx.proxy supports only connect proxies",
+    ),
+])
+def test_missing_or_reserved_resource_refuses_before_any_remote_call(
+    sdk, core, monkeypatch, run_script, args, declared, message
+):
+    _, requests = sdk
+    built = []
+    monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: built.append(kw))
+    # The credentials binding comes first: it would read the cloud if the check ran in order.
+    result = run_script(
+        source(
+            f'vault: Credentials = binding(package="com.example")\n{declared}', 'print("MAIN")'
+        ),
+        extra_args=["--cloud", "--device-id", "dev-1", *args],
+    )
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == f"NotAvailableError: {message}"
+    assert built == [] and requests == []
+    assert result.out == ""
+
+
+def test_valid_mailbox_does_not_hide_a_missing_proxy_from_the_local_checks(
+    sdk, core, monkeypatch, run_script
+):
+    _, requests = sdk
+    built = []
+    monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: built.append(kw))
+    result = run_script(
+        source("device: Device\nemail: Mailbox\nproxy: Proxy", 'print("MAIN")'),
+        extra_args=["--cloud", "--device-id", "dev-1", *MAILBOX_ARGS],
+    )
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.proxy this run has no proxy"
+    )
+    assert built == [] and requests == []
+
+
+def test_proxy_without_a_device_id_refuses_before_any_remote_call(sdk, monkeypatch, run_script):
+    _, requests = sdk
+    built = []
+    monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: built.append(kw))
+    result = run_script(
+        source("device: Device\nemail: Mailbox\nproxy: Proxy", 'print("MAIN")'),
+        extra_args=["--cloud", *MAILBOX_ARGS, *PROXY_ARGS],
+    )
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.proxy this run has no device"
+    )
+    assert built == [] and requests == []
+
+
+@pytest.mark.parametrize("run_info,message", [
+    ({"mailbox_id": "mailbox-1"}, "ctx.email has an invalid mailbox id"),
+    ({"mailbox_id": MAILBOX_ID.upper() + " "}, "ctx.email has an invalid mailbox id"),
+])
+def test_programmatic_run_info_gets_the_same_validation(sdk, tmp_path, write_script, run_info,
+                                                         message):
+    from mobilerun_functions import RunInfo
+    from mobilerun_functions.runner import RunOptions, run
+
+    _, requests = sdk
+    (tmp_path / "in.json").write_text("{}")
+    path = write_script(source("email: Mailbox", 'print("MAIN")'))
+    code = run(RunOptions(
+        path=str(path), input_file=str(tmp_path / "in.json"),
+        result_file=str(tmp_path / "out.json"), run_info=RunInfo(**run_info), cloud=True,
+    ))
+    envelope = json.loads((tmp_path / "out.json").read_text())
+    assert code == 1
+    assert envelope["error"]["message"] == f"NotAvailableError: {message}"
+    assert requests == []
+
+
+def test_programmatic_proxy_id_is_validated(sdk, core, tmp_path, write_script):
+    from mobilerun_functions import ProxyRef, RunInfo
+    from mobilerun_functions.runner import RunOptions, run
+
+    _, requests = sdk
+    (tmp_path / "in.json").write_text("{}")
+    path = write_script(source("device: Device\nproxy: Proxy", 'print("MAIN")'))
+    code = run(RunOptions(
+        path=str(path), input_file=str(tmp_path / "in.json"),
+        result_file=str(tmp_path / "out.json"),
+        run_info=RunInfo(device_id="dev-1", proxy=ProxyRef("connect", "proxy-1")), cloud=True,
+    ))
+    envelope = json.loads((tmp_path / "out.json").read_text())
+    assert code == 1
+    assert envelope["error"]["message"] == "NotAvailableError: ctx.proxy has an invalid proxy id"
+    assert requests == []

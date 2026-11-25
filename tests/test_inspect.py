@@ -410,3 +410,19 @@ def test_a_uuid_key_is_accepted(inspect_source):
     code, out, err = inspect_source(source)
     assert code == 0, err
     assert json.loads(out)["datasetKey"] == "id"
+
+
+def test_inspect_bare_resources_reads_no_run_flag_and_needs_no_network(inspect_source, monkeypatch):
+    monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: pytest.fail("network"))
+    code, out, err = inspect_source(
+        "from pydantic import BaseModel\n"
+        "from mobilerun_functions import Context, Device, Mailbox, Proxy, script\n"
+        "class Input(BaseModel):\n    note: str\n"
+        "class Ctx(Context):\n    device: Device\n    mailbox: Mailbox\n    proxy: Proxy\n"
+        "@script\n"
+        "def main(input: Input, ctx: Ctx) -> None:\n    pass\n"
+    )
+    assert code == 0, err
+    document = json.loads(out)
+    assert set(document["inputSchema"]["properties"]) == {"note"}
+    assert document["requires"]["mailbox"] is True and document["requires"]["proxy"] is True

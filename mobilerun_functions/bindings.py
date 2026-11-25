@@ -106,9 +106,8 @@ class Tasks(Protocol):
 @dataclass(frozen=True)
 class Binding:
     package: str | None = None
-    input: str | None = None
 
 
-def binding(*, package: str | None = None, input: str | None = None) -> Any:
+def binding(*, package: str | None = None) -> Any:
     """A declaration, replaced by the runner before the entry point is called."""
-    return Binding(package=package, input=input)
+    return Binding(package=package)
