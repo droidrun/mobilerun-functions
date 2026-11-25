@@ -7,6 +7,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from .owner import LoopOwner
 from .tasks import POLL_INTERVAL
 
 
@@ -22,7 +23,9 @@ class MailboxAdapter:
         address: str | None,
         *,
         clock: Callable[[], datetime] = _utc_now,
+        owner: LoopOwner | None = None,
     ) -> None:
+        self._owner = owner or LoopOwner()
         self._client = client
         self._id = mailbox_id
         self._address = address
@@ -39,6 +42,11 @@ class MailboxAdapter:
         timeout: float = 60,
         after: datetime | None = None,
     ) -> str:
+        return await self._owner.run(self._wait_for_code(sender, timeout, after))
+
+    async def _wait_for_code(
+        self, sender: str | None, timeout: float, after: datetime | None
+    ) -> str:
         # One baseline per wait, so a code that arrived before it is never returned.
         params: dict[str, Any] = {"after": after if after is not None else self._clock()}
         if sender is not None:
@@ -54,11 +62,15 @@ class MailboxAdapter:
 
 
 class ProxyAdapter:
-    def __init__(self, client: Any, device_id: str) -> None:
+    def __init__(self, client: Any, device_id: str, owner: LoopOwner | None = None) -> None:
+        self._owner = owner or LoopOwner()
         self._client = client
         self._device_id = device_id
 
     async def status(self) -> dict[str, Any]:
+        return await self._owner.run(self._status())
+
+    async def _status(self) -> dict[str, Any]:
         response = await self._client.devices.proxy.status(self._device_id)
         result: dict[str, Any] = response.model_dump(mode="json", by_alias=True)
         return result

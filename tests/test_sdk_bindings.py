@@ -24,6 +24,7 @@ def sdk(monkeypatch):
     responses = deque()
 
     async def handle(request):
+        request.extensions["loop"] = asyncio.get_running_loop()
         requests.append(request)
         status, payload = responses.popleft()
         return httpx.Response(status, json=payload)
@@ -254,6 +255,48 @@ def test_proxy_connects_existing_id_only_and_leaves_it_connected(sdk, core, run_
     ]
     assert json.loads(requests[0].content) == {"connect": {"id": PROXY_ID}}
     assert not responses
+
+
+def test_sync_main_mailbox_io_stays_on_the_runner_loop(sdk, run_script):
+    responses, requests = sdk
+    responses.extend([(200, {"data": {"address": "example@example.test"}}), (200, OTP_OK)])
+    result = run_script(source(
+        'email: Mailbox', 'print(asyncio.run(ctx.email.wait_for_code()))',
+        before="\nimport asyncio\n",
+    ).replace("async def main", "def main"), extra_args=MAILBOX_ARGS)
+    assert result.code == 0, result.err
+    assert result.out == "0042\n"
+    assert [request.url.path for request in requests] == [
+        f"/v1/mailboxes/{MAILBOX_ID}", f"/v1/mailboxes/{MAILBOX_ID}/otp",
+    ]
+    assert len({request.extensions["loop"] for request in requests}) == 1
+
+
+def test_sync_main_proxy_status_stays_on_the_runner_loop(sdk, core, run_script):
+    responses, requests = sdk
+    responses.extend([(204, None), (200, {"connected": True})])
+    result = run_script(source(
+        'device: Device\nproxy: Proxy', 'print(asyncio.run(ctx.proxy.status())["connected"])',
+        before="\nimport asyncio\n",
+    ).replace("async def main", "def main"),
+        extra_args=["--cloud", "--device-id", "dev-1", *PROXY_ARGS])
+    assert result.code == 0, result.err
+    assert result.out == "True\n"
+    assert len({request.extensions["loop"] for request in requests}) == 1
+
+
+@pytest.mark.parametrize("mode", ["dry_run", "verification"])
+def test_proxy_is_not_attached_outside_live_runs(sdk, core, run_script, mode):
+    responses, requests = sdk
+    responses.append((200, {"connected": False}))
+    result = run_script(source(
+        'device: Device\nproxy: Proxy', 'print((await ctx.proxy.status())["connected"])',
+    ), extra_args=["--cloud", "--device-id", "dev-1", "--mode", mode, *PROXY_ARGS])
+    assert result.code == 0, result.err
+    assert result.out == "False\n"
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", "/v1/devices/dev-1/proxy"),
+    ]
 
 
 def test_cloud_flag_defaults_to_public_base_and_legacy_key(sdk, monkeypatch, run_script):
@@ -758,6 +801,40 @@ def test_platform_task_refusals_become_not_available(platform, run_script, code,
     assert result.code == 1
     assert result.envelope["error"]["message"] == f"NotAvailableError: ctx.tasks {code}"
     assert len(requests) == 1
+
+
+def test_platform_run_id_is_a_path_segment_not_a_path(platform, run_script):
+    responses, requests = platform
+    responses.extend([(202, run_task()), (200, run_task("completed", succeeded=True))])
+    result = run_script(tasks_script(), extra_args=[
+        "--run-id", "run/../x?y", "--device-id", "dev-1",
+    ])
+    assert result.code == 0, result.err
+    assert [request.url.raw_path for request in requests] == [
+        b"/v1/compute/runs/run%2F..%2Fx%3Fy/tasks",
+        b"/v1/compute/runs/run%2F..%2Fx%3Fy/tasks/run-task-1",
+    ]
+
+
+def test_platform_task_id_from_the_server_is_a_path_segment(platform, run_script):
+    responses, requests = platform
+    responses.extend([
+        (202, run_task(id="a/../b")), (200, run_task("completed", succeeded=True, id="a/../b")),
+    ])
+    result = run_script(tasks_script(), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    assert requests[1].url.raw_path == b"/v1/compute/runs/run-1/tasks/a%2F..%2Fb"
+
+
+@pytest.mark.parametrize("run_id", ["..", "."])
+def test_platform_dot_segment_run_id_is_refused_before_any_call(platform, run_script, run_id):
+    _, requests = platform
+    result = run_script(tasks_script(), extra_args=["--run-id", run_id, "--device-id", "dev-1"])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.tasks run or task id is not a valid path segment"
+    )
+    assert requests == []
 
 
 def test_platform_other_task_errors_are_not_reported_as_unavailable(platform, run_script):

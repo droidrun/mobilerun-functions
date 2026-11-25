@@ -221,7 +221,7 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 ## Context reference
 
-### Bindings contract (0.2.0)
+### Bindings contract (0.2.0rc1)
 
 Declare what the function needs using interface types in a `Context` subclass. The runner
 provides implementations before `main`; the function file stays the same locally and in the
@@ -316,10 +316,13 @@ another_account: example-only
 `credentials.list()` returns only package, name, and field names of the bound package.
 `credentials.type_field(device, field, *, name=None)` types directly into a focused field
 and returns no secret value; the package is the one declared with `binding(package=...)`.
-It refreshes state and refuses to type unless a non-empty focused element is reported with
-`isEditable: true`. A flat `name: value` entry of a local credentials file binds to the
+It accepts only the run's own bound device. It refreshes state and refuses to type unless the
+bound package is the foreground app (Android package or iOS bundle id; an unknown foreground
+app is refused) and a focused element is reported with `isEditable: true`. The typing call
+raises the SDK loggers to at least `INFO`, so `MOBILERUN_LOG=debug` never writes the value. A flat `name: value` entry of a local credentials file binds to the
 declared package. In the cloud, only the declared packages are read (one request per
-package); other packages' values never enter the run. Driver failures while typing
+package); other packages' values never enter the run. The runtime reads only the declared
+credential packages; your function's own code can use whatever its run key allows. Driver failures while typing
 credentials are reported without the value. Never put credential values in input JSON or log
 them.
 
@@ -336,7 +339,10 @@ preserving leading zeros. Only a code received after the wait began (UTC), or af
 when you pass it, is returned. No code yet (204) keeps polling; an unknown mailbox (404), a
 conflict (409) or an auth error fails at once, and `timeout` raises `TimeoutError`.
 Proxy resolution requires a cloud device (`--cloud` or
-`--device-target cloud`) and a `connect` proxy: it connects the selected existing proxy to the run's `--device-id` through the device proxy endpoint, exactly once and before `main`, and **leaves it connected** after the run.
+`--device-target cloud`) and a `connect` proxy: it connects the selected existing proxy to the run's `--device-id` through the device proxy endpoint, exactly once and before `main`, and **leaves it connected** after the run. The proxy is attached
+only in live runs; in `dry_run` and `verification` runs nothing is attached and `status()` still
+reads the device's proxy. Adapter I/O of a synchronous `main` runs on the runner's event loop, so
+`asyncio.run(ctx.email.wait_for_code())` is safe there.
 No resource is bought, created, or deleted during resolution.
 
 Declaring `ai: AI` (`binding()` only, at most one) gives an OpenAI-compatible client for the
@@ -413,7 +419,7 @@ No ctx method buys, creates, or deletes resources. Tasks consume usage like any 
 
 ### Control the device
 
-Existing scripts annotated `ctx: Context` keep `ctx.device()` unchanged in 0.2.0.
+Existing scripts annotated `ctx: Context` keep `ctx.device()` unchanged in 0.2.0rc1.
 The first call per context emits one `DeprecationWarning` naming the new `Ctx` form.
 A run started with a device gives the script `ctx.device()`. It is synchronous and returns the
 `mobilerun-core` device of the run, connected once and reused on every call:

@@ -5,11 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from ..bindings import UIState
 from ..errors import NotAvailableError
+
+SCREENSHOT_PREFIX = "mobilerun-screenshot-"
 
 
 class _Snapshot:
@@ -44,6 +47,12 @@ class StateAdapter:
         return self._current
 
 
+def _is_screenshot_temp_file(path: Path) -> bool:
+    """Only the core's own temp file is a path; anything else is base64 (a JPEG starts `/9j/`)."""
+    in_temp_dir = path.parent == Path(tempfile.gettempdir())
+    return in_temp_dir and path.name.startswith(SCREENSHOT_PREFIX)
+
+
 class DeviceAdapter:
     def __init__(self, core: Any, device_id: str | None) -> None:
         self._core = core
@@ -57,12 +66,12 @@ class DeviceAdapter:
     async def screenshot(self, hide_overlay: bool = True) -> bytes:
         value = await asyncio.to_thread(self._core.screenshot, hide_overlay=hide_overlay)
         path = Path(value)
-        if value.startswith("/"):
+        if _is_screenshot_temp_file(path):
             try:
                 return await asyncio.to_thread(path.read_bytes)
             finally:
                 await asyncio.to_thread(path.unlink)
-        return base64.b64decode(value)
+        return base64.b64decode(value, validate=True)
 
     async def tap(self, x: int, y: int) -> None:
         await asyncio.to_thread(self._core.tap, x, y)

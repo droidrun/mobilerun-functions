@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ..bindings import Device
 from ..errors import NotAvailableError
+
+# The core reads the foreground app (Android package, iOS bundle id) from these keys.
+FOREGROUND_KEYS = ("app_id", "package_name", "bundle_id", "packageName")
+# SDK debug logs include request bodies; the typed value must never reach them.
+SDK_LOGGERS = ("mobilerun_sdk", "httpx", "httpcore")
 
 
 @dataclass(repr=False)
@@ -24,6 +32,7 @@ class CredentialsAdapter:
 
     def __init__(self, credentials: list[Credential], package: str) -> None:
         self._package = package
+        self.run_device: Device | None = None  # Set once the run's device is bound.
         self._credentials = [item for item in credentials if item.package in (None, package)]
         if not self._credentials:
             raise NotAvailableError("credentials", "no credentials for the declared package")
@@ -35,23 +44,23 @@ class CredentialsAdapter:
         ]
 
     async def type_field(self, device: Device, field: str, *, name: str | None = None) -> None:
+        if device is not self.run_device:
+            raise NotAvailableError("credentials", "device is not the run's device")
         for item in self._credentials:
             matches = (name is None or item.name == name) and field in item.fields
             if not matches:
                 continue
             phone_state = (await device.state.refresh()).phone_state
+            self._require_foreground_package(phone_state)
             focused = phone_state.get("focusedElement")
-            has_focused_input = (
-                isinstance(focused, dict) and bool(focused)
-                and phone_state.get("isEditable") is True
-            )
-            if not has_focused_input:
+            if not (isinstance(focused, dict) and phone_state.get("isEditable") is True):
                 raise NotAvailableError(
                     "credentials",
                     "no text field is focused; tap the field before typing a credential",
                 )
             try:
-                accepted = await device.input_text(item.fields[field])
+                with _sdk_logs_at_least_info():
+                    accepted = await device.input_text(item.fields[field])
             except Exception:
                 # Driver exceptions can include the typed text. Do not propagate them.
                 raise NotAvailableError("credentials", "device rejected credential input") from None
@@ -59,6 +68,32 @@ class CredentialsAdapter:
                 raise NotAvailableError("credentials", "device rejected credential input")
             return
         raise NotAvailableError("credentials", "credential field not found")
+
+    def _require_foreground_package(self, phone_state: dict[str, Any]) -> None:
+        foreground = next(
+            (phone_state[key] for key in FOREGROUND_KEYS if isinstance(phone_state.get(key), str)),
+            None,
+        )
+        if foreground is None:
+            raise NotAvailableError(
+                "credentials", "the foreground app is unknown; credentials are not typed"
+            )
+        if foreground != self._package:
+            raise NotAvailableError(
+                "credentials", "the bound package is not in the foreground; open it first"
+            )
+
+
+@contextmanager
+def _sdk_logs_at_least_info() -> Iterator[None]:
+    saved = [(logging.getLogger(name), logging.getLogger(name).level) for name in SDK_LOGGERS]
+    try:
+        for logger, _ in saved:
+            logger.setLevel(max(logger.getEffectiveLevel(), logging.INFO))
+        yield
+    finally:
+        for logger, level in saved:
+            logger.setLevel(level)
 
 
 def read_file(path: str) -> list[Credential]:

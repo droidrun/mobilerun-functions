@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from ._adapters.ai import AIAdapter, ai_base_url
 from ._adapters.credentials import Credential, CredentialsAdapter, read_cloud, read_file
 from ._adapters.device import DeviceAdapter
+from ._adapters.owner import LoopOwner
 from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import CloudTasks, RunTasks
 from ._connection import Connection
@@ -46,6 +47,7 @@ async def _resolve(
     stack: AsyncExitStack,
 ) -> None:
     _check_local(entry, ctx, connection)
+    owner = LoopOwner(asyncio.get_running_loop())
     client: Any = None
     device = None
     credential_file: list[Credential] | None = None
@@ -78,13 +80,14 @@ async def _resolve(
                 mailbox_id = ctx.run.mailbox_id
                 assert mailbox_id is not None
                 response = await client.mailboxes.retrieve(mailbox_id)
-                value = MailboxAdapter(client, mailbox_id, response.data.address)
+                value = MailboxAdapter(client, mailbox_id, response.data.address, owner=owner)
             elif item.interface is Proxy:
                 proxy = ctx.run.proxy
                 device_id = ctx.run.device_id
                 assert proxy is not None and device_id is not None
-                await client.devices.proxy.connect(device_id, connect={"id": proxy.id})
-                value = ProxyAdapter(client, device_id)
+                if ctx.run.mode == "live":
+                    await client.devices.proxy.connect(device_id, connect={"id": proxy.id})
+                value = ProxyAdapter(client, device_id, owner)
             elif item.interface is Tasks:
                 continue  # Built below: it needs the device binding.
             elif item.interface is AI:
@@ -107,7 +110,9 @@ async def _resolve(
     for item in entry.bindings:
         if item.interface is Tasks:
             assert device is not None
-            setattr(ctx, item.name, _tasks(client, device, ctx.run, connection))
+            setattr(ctx, item.name, _tasks(client, device, ctx.run, connection, owner))
+        if item.interface is Credentials:
+            getattr(ctx, item.name).run_device = device
 
 
 def _check_local(entry: EntryPoint, ctx: Context, connection: Connection) -> None:
@@ -137,10 +142,12 @@ def _check_local(entry: EntryPoint, ctx: Context, connection: Connection) -> Non
                 raise NotAvailableError(name, "this run has no device")
 
 
-def _tasks(client: Any, device: DeviceAdapter, run: RunInfo, connection: Connection) -> Any:
+def _tasks(
+    client: Any, device: DeviceAdapter, run: RunInfo, connection: Connection, owner: LoopOwner
+) -> Any:
     if connection.platform:
-        return RunTasks(client, device, run.run_id)
-    return CloudTasks(client, device)
+        return RunTasks(client, device, run.run_id, owner)
+    return CloudTasks(client, device, owner)
 
 
 def _cloud_device(run: RunInfo, connection: Connection) -> bool:

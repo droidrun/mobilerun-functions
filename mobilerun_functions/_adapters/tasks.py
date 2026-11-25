@@ -8,11 +8,13 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 from uuid import uuid4
 
+from mobilerun_sdk._utils import path_template
 from pydantic import BaseModel, ValidationError
 
 from ..errors import NotAvailableError
 from ..results import ExecutionResult
 from .device import DeviceAdapter
+from .owner import LoopOwner
 
 T = TypeVar("T", bound=BaseModel)
 S = TypeVar("S")
@@ -20,6 +22,8 @@ TASK_START_TIMEOUT = 30.0
 TASK_TIMEOUT = 1800.0
 POLL_INTERVAL = 2.0
 RUN_TASK_TIMEOUT_MAX_S = 2700
+RUN_TASKS_PATH = "/compute/runs/{run_id}/tasks"
+RUN_TASK_PATH = RUN_TASKS_PATH + "/{task_id}"
 RUN_TASK_TERMINAL = frozenset({"completed", "failed", "cancelled"})
 RUN_TASK_REFUSALS = frozenset({
     "device_lease_not_held", "tasks_not_declared", "run_not_active", "device_not_in_run",
@@ -27,9 +31,12 @@ RUN_TASK_REFUSALS = frozenset({
 
 
 class _Tasks:
-    def __init__(self, client: Any, device: DeviceAdapter) -> None:
+    def __init__(
+        self, client: Any, device: DeviceAdapter, owner: LoopOwner | None = None
+    ) -> None:
         self._client = client
         self._device = device
+        self._owner = owner or LoopOwner()
 
     def _device_id(self, device: Any) -> str:
         device_id = device.device_id if device is self._device else None
@@ -49,6 +56,16 @@ class CloudTasks(_Tasks):
         output: type[T] | None = None,
         max_steps: int | None = None,
         timeout: float | None = None,
+    ) -> ExecutionResult[T]:
+        return await self._owner.run(self._run(task, device, output, max_steps, timeout))
+
+    async def _run(
+        self,
+        task: str,
+        device: Any,
+        output: type[T] | None,
+        max_steps: int | None,
+        timeout: float | None,
     ) -> ExecutionResult[T]:
         params: dict[str, Any] = {"device_id": self._device_id(device), "task": task}
         if output is not None:
@@ -74,9 +91,12 @@ class CloudTasks(_Tasks):
 class RunTasks(_Tasks):
     """The run's own task routes: the platform holds the device lease for the run."""
 
-    def __init__(self, client: Any, device: DeviceAdapter, run_id: str) -> None:
-        super().__init__(client, device)
-        self._path = f"/compute/runs/{run_id}/tasks"
+    def __init__(
+        self, client: Any, device: DeviceAdapter, run_id: str, owner: LoopOwner | None = None
+    ) -> None:
+        super().__init__(client, device, owner)
+        self._run_id = run_id
+        self._path = _path(RUN_TASKS_PATH, run_id=run_id)
 
     async def run(
         self,
@@ -86,6 +106,16 @@ class RunTasks(_Tasks):
         output: type[T] | None = None,
         max_steps: int | None = None,
         timeout: float | None = None,
+    ) -> ExecutionResult[T]:
+        return await self._owner.run(self._run(task, device, output, max_steps, timeout))
+
+    async def _run(
+        self,
+        task: str,
+        device: Any,
+        output: type[T] | None,
+        max_steps: int | None,
+        timeout: float | None,
     ) -> ExecutionResult[T]:
         body: dict[str, Any] = {"task": task, "deviceId": self._device_id(device)}
         if output is not None:
@@ -99,7 +129,7 @@ class RunTasks(_Tasks):
             self._client.post(self._path, cast_to=object, body=body, options=options)
         )
         task_id = started["id"]
-        task_path = f"{self._path}/{task_id}"
+        task_path = _path(RUN_TASK_PATH, run_id=self._run_id, task_id=task_id)
 
         async def fetch() -> Any:
             state = await self._call(self._client.get(task_path, cast_to=object))
@@ -128,6 +158,13 @@ class RunTasks(_Tasks):
             raise
         data: dict[str, Any] = response["data"]
         return data
+
+
+def _path(template: str, **ids: Any) -> str:
+    try:
+        return path_template(template, **{key: str(value) for key, value in ids.items()})
+    except ValueError:
+        raise NotAvailableError("tasks", "run or task id is not a valid path segment") from None
 
 
 async def _poll(

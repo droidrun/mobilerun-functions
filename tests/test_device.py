@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
+import logging
+import os
 import sys
+import tempfile
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -44,8 +49,11 @@ class FakeCore:
         self.module.Mobilerun = Mobilerun  # type: ignore[attr-defined]
 
 
-def focused_device(**methods):
-    raw = {"phone_state": {"focusedElement": {"text": ""}, "isEditable": True}}
+def focused_device(foreground=None, **methods):
+    """A device with an editable focused field; `foreground` replaces the app identifier keys."""
+    phone_state = {"focusedElement": {"text": ""}, "isEditable": True}
+    phone_state.update(foreground or {"packageName": "com.example"})
+    raw = {"phone_state": phone_state}
     ui = types.SimpleNamespace(nodes=[], get=raw.get)
     return types.SimpleNamespace(ui=lambda: ui, screen_size=lambda: (1080, 1920), **methods)
 
@@ -501,14 +509,56 @@ def test_binding_screenshot_decodes_local_base64(fake_core, run_script):
 def test_binding_screenshot_reads_cloud_file_bytes(fake_core, tmp_path, run_script):
     from test_bindings import source
 
-    screenshot = tmp_path / "screen.png"
-    screenshot.write_bytes(b"png")
+    handle, name = tempfile.mkstemp(prefix="mobilerun-screenshot-", suffix=".png")
+    screenshot = Path(name)
+    with os.fdopen(handle, "wb") as stream:
+        stream.write(b"png")
     fake_core.device = types.SimpleNamespace(screenshot=lambda **kwargs: str(screenshot))
     result = run_script(source("device: Device", "print(await ctx.device.screenshot(False))"),
                         extra_args=["--device-id", "dev-1"])
     assert result.code == 0, result.err
     assert result.out == "b'png'\n"
     assert not screenshot.exists()
+
+
+JPEG = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01"
+
+
+def test_binding_screenshot_decodes_jpeg_base64_that_starts_with_a_slash(fake_core, run_script):
+    from test_bindings import source
+
+    encoded = base64.b64encode(JPEG).decode()
+    assert encoded.startswith("/9j/")
+    fake_core.device = types.SimpleNamespace(screenshot=lambda **kwargs: encoded)
+    result = run_script(source("device: Device", "print(await ctx.device.screenshot())"),
+                        extra_args=["--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    assert result.out == f"{JPEG!r}\n"
+
+
+@pytest.mark.parametrize("where", ["other-directory", "temp-directory-other-prefix"])
+def test_binding_screenshot_never_reads_or_deletes_a_foreign_path(
+    fake_core, tmp_path, run_script, where
+):
+    from test_bindings import source
+
+    if where == "other-directory":
+        foreign = tmp_path / "mobilerun-screenshot-foreign.png"
+        foreign.write_bytes(b"foreign-content")
+    else:
+        handle, name = tempfile.mkstemp(prefix="foreign-")
+        os.close(handle)
+        foreign = Path(name)
+        foreign.write_bytes(b"foreign-content")
+    try:
+        fake_core.device = types.SimpleNamespace(screenshot=lambda **kwargs: str(foreign))
+        result = run_script(source("device: Device", "print(await ctx.device.screenshot())"),
+                            extra_args=["--device-id", "dev-1"])
+        assert result.code == 1
+        assert "foreign-content" not in result.out + result.err + json.dumps(result.envelope)
+        assert foreign.read_bytes() == b"foreign-content"
+    finally:
+        foreign.unlink(missing_ok=True)
 
 
 def test_sync_bound_context_can_run_its_own_event_loop(tmp_path, run_script):
@@ -528,7 +578,6 @@ def test_sync_bound_context_can_run_its_own_event_loop(tmp_path, run_script):
 
 
 @pytest.mark.parametrize("phone_state", [
-    {"focusedElement": {}, "isEditable": True},
     {"focusedElement": {"text": "search"}, "isEditable": False},
     {"focusedElement": None, "isEditable": True},
     {"focusedElement": "not-a-field", "isEditable": True},
@@ -542,7 +591,7 @@ def test_credentials_refuse_unfocused_input(
     path.write_text('work: "file-secret-value"\n')
     path.chmod(0o600)
     typed = []
-    raw = {"phone_state": phone_state}
+    raw = {"phone_state": {**phone_state, "packageName": "com.example"}}
     ui = types.SimpleNamespace(nodes=[], get=raw.get)
     fake_core.device = types.SimpleNamespace(
         ui=lambda: ui, screen_size=lambda: (1080, 1920),
@@ -561,6 +610,119 @@ def test_credentials_refuse_unfocused_input(
     )
     assert typed == []
     assert "file-secret-value" not in result.err + json.dumps(result.envelope)
+
+
+def credential_script(tmp_path, source_body):
+    from test_bindings import source
+
+    path = tmp_path / "credentials.yaml"
+    path.write_text('work: "file-secret-value"\n')
+    path.chmod(0o600)
+    args = ["--device-target", "local", "--device-id", "serial", "--credentials-file", str(path)]
+    script = source(
+        'device: Device\nvault: Credentials = binding(package="com.example")', source_body,
+    )
+    return script, args
+
+
+@pytest.mark.parametrize("foreground,message", [
+    ({"packageName": "com.other"}, "the bound package is not in the foreground; open it first"),
+    ({"bundle_id": "com.other"}, "the bound package is not in the foreground; open it first"),
+    ({"unrelated": "x"}, None),
+])
+def test_credentials_refuse_when_the_bound_package_is_not_in_the_foreground(
+    fake_core, fake_local, tmp_path, run_script, foreground, message
+):
+    typed = []
+    fake_core.device = focused_device(foreground, type=lambda text, **kwargs: typed.append(text))
+    script, args = credential_script(tmp_path, 'await ctx.vault.type_field(ctx.device, "password")')
+    result = run_script(script, extra_args=args)
+    assert result.code == 1
+    expected = message or "the foreground app is unknown; credentials are not typed"
+    assert result.envelope["error"]["message"] == f"NotAvailableError: ctx.credentials {expected}"
+    assert typed == []
+    assert "file-secret-value" not in result.err + json.dumps(result.envelope)
+
+
+def test_credentials_type_when_an_ios_bundle_id_matches(
+    fake_core, fake_local, tmp_path, run_script
+):
+    typed = []
+    fake_core.device = focused_device(
+        {"bundle_id": "com.example"}, type=lambda text, **kwargs: typed.append(text),
+    )
+    script, args = credential_script(tmp_path, 'await ctx.vault.type_field(ctx.device, "password")')
+    result = run_script(script, extra_args=args)
+    assert result.code == 0, result.err
+    assert typed == ["file-secret-value"]
+
+
+def test_credentials_type_into_an_empty_focused_element_dict(
+    fake_core, fake_local, tmp_path, run_script
+):
+    typed = []
+    raw = {"phone_state": {"focusedElement": {}, "isEditable": True, "packageName": "com.example"}}
+    ui = types.SimpleNamespace(nodes=[], get=raw.get)
+    fake_core.device = types.SimpleNamespace(
+        ui=lambda: ui, screen_size=lambda: (1080, 1920),
+        type=lambda text, **kwargs: typed.append(text),
+    )
+    script, args = credential_script(tmp_path, 'await ctx.vault.type_field(ctx.device, "password")')
+    result = run_script(script, extra_args=args)
+    assert result.code == 0, result.err
+    assert typed == ["file-secret-value"]
+
+
+def test_credentials_refuse_a_device_that_is_not_the_runs_device(
+    fake_core, fake_local, tmp_path, run_script
+):
+    typed = []
+    fake_core.device = focused_device(type=lambda text, **kwargs: typed.append(text))
+    script, args = credential_script(
+        tmp_path,
+        'from mobilerun_functions._adapters.device import DeviceAdapter\n'
+        '    other = DeviceAdapter(object(), "other")\n'
+        '    await ctx.vault.type_field(other, "password")',
+    )
+    result = run_script(script, extra_args=args)
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.credentials device is not the run's device"
+    )
+    assert typed == []
+
+
+def test_credential_typing_stays_out_of_sdk_debug_logs(
+    fake_core, fake_local, tmp_path, run_script, caplog, monkeypatch
+):
+    import httpx
+    from mobilerun_sdk import Mobilerun
+
+    def accept(request):
+        return httpx.Response(204)
+
+    sdk = Mobilerun(
+        api_key="test-key", base_url="https://api.example.test/v1", max_retries=0,
+        http_client=httpx.Client(transport=httpx.MockTransport(accept)),
+    )
+
+    def type_through_sdk(text, **kwargs):
+        sdk.devices.keyboard.write("dev-1", text=text)
+
+    names = ("mobilerun_sdk", "httpx", "httpcore")
+    for name in names:
+        monkeypatch.setattr(logging.getLogger(name), "level", logging.DEBUG)  # MOBILERUN_LOG=debug
+    caplog.set_level(logging.DEBUG)
+    fake_core.device = focused_device(type=type_through_sdk)
+    # Control: without the guard the SDK logs the typed value, so the capture can see it.
+    type_through_sdk("control-secret-value")
+    assert "control-secret-value" in caplog.text
+    caplog.clear()
+    script, args = credential_script(tmp_path, 'await ctx.vault.type_field(ctx.device, "password")')
+    result = run_script(script, extra_args=args)
+    assert result.code == 0, result.err
+    assert "file-secret-value" not in caplog.text + result.err + result.out
+    assert [logging.getLogger(name).level for name in names] == [logging.DEBUG] * 3
 
 
 def test_missing_yaml_reports_install_extra(tmp_path, monkeypatch, run_script):
