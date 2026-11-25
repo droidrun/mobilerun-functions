@@ -322,7 +322,9 @@ app is refused) and a focused element is reported with `isEditable: true`. The t
 raises the SDK loggers to at least `INFO`, so `MOBILERUN_LOG=debug` never writes the value. A flat `name: value` entry of a local credentials file binds to the
 declared package. In the cloud, only the declared packages are read (one request per
 package); other packages' values never enter the run. The runtime reads only the declared
-credential packages; your function's own code can use whatever its run key allows. Driver failures while typing
+credential packages; your function's own code can use whatever its run key allows. Function
+code holding a full run key can call any API that key allows, including the device proxy
+endpoint; the runtime itself only attaches the proxy selected by id. Driver failures while typing
 credentials are reported without the value. Never put credential values in input JSON or log
 them.
 
