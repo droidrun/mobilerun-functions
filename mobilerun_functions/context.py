@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from mobilerun_core import Device
 
 STATUS_FILE_ENV = "MOBILERUN_FUNCTIONS_STATUS_FILE"
-_BINDING_OVERRIDES = frozenset({"device", "credentials", "llm"})
+_BINDING_OVERRIDES = frozenset({"device", "credentials", "ai"})
 LEGACY_DEVICE_WARNING = (
     "ctx.device() is deprecated; declare class Ctx(Context): device: Device "
     "and use await ctx.device.tap(...) instead"
@@ -191,5 +191,5 @@ class Context:
         raise NotAvailableError("files")
 
     @property
-    def llm(self) -> NoReturn:
-        raise NotAvailableError("llm", "is not available: declare `llm: LLM` in your Ctx")
+    def ai(self) -> NoReturn:
+        raise NotAvailableError("ai", "is not available: declare `ai: AI` in your Ctx")

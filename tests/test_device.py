@@ -163,7 +163,7 @@ def test_connect_failure_is_not_cached(fake_core: FakeCore) -> None:
 
 def test_other_members_still_unavailable() -> None:
     ctx = make_ctx()
-    for name in ("credentials", "files", "llm"):
+    for name in ("credentials", "files", "ai"):
         with pytest.raises(NotAvailableError):
             getattr(ctx, name)
 

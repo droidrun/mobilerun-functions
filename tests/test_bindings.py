@@ -7,7 +7,7 @@ import pytest
 PRELUDE = '''
 from pydantic import BaseModel, Field
 from mobilerun_functions import (
-    Context, Credentials, Device, LLM, Mailbox, Proxy, Tasks, binding, script,
+    Context, Credentials, Device, AI, Mailbox, Proxy, Tasks, binding, script,
 )
 
 class Input(BaseModel):
@@ -29,7 +29,7 @@ def test_inspect_bindings_requires_and_input_formats(inspect_source):
         'netflix: Credentials = binding(package="com.netflix.mediaclient")\n'
         'gmail: Credentials = binding(package="com.google.android.gm")\n'
         'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")\n'
-        'llm: LLM'
+        'ai: AI'
     ))
     assert code == 0, err
     document = json.loads(out)
@@ -39,7 +39,7 @@ def test_inspect_bindings_requires_and_input_formats(inspect_source):
         "mailbox": True,
         "proxy": True,
         "tasks": True,
-        "llm": True,
+        "ai": True,
     }
     assert document["inputSchema"]["properties"]["mailbox_id"]["format"] == "mobilerun-mailbox"
     assert document["inputSchema"]["properties"]["proxy_id"]["format"] == "mobilerun-proxy"
@@ -53,7 +53,7 @@ def test_legacy_and_no_context_require_nothing(inspect_source, signature):
     assert code == 0
     assert json.loads(out)["requires"] == {
         "device": False, "credentials": [], "mailbox": False, "proxy": False, "tasks": False,
-        "llm": False,
+        "ai": False,
     }
 
 
@@ -78,9 +78,9 @@ def test_inspect_rejects_implementations_and_other_types(inspect_source, field):
      "at most one Mailbox"),
     ('a: Proxy = binding(input="proxy_id")\nb: Proxy = binding(input="proxy_id")',
      "at most one Proxy"),
-    ("a: LLM\nb: LLM", "at most one LLM"),
-    ("llm: LLM = binding(package='pkg')", "accepts only binding()"),
-    ('llm: LLM = binding(input="mailbox_id")', "accepts only binding()"),
+    ("a: AI\nb: AI", "at most one AI"),
+    ("ai: AI = binding(package='pkg')", "accepts only binding()"),
+    ('ai: AI = binding(input="mailbox_id")', "accepts only binding()"),
     ("tasks: Tasks", "tasks: requires a Device binding"),
     ("vault: Credentials", 'Credentials requires binding(package="...")'),
     ('a: Credentials = binding(package="pkg")\nb: Credentials = binding(package="pkg")',
@@ -169,9 +169,9 @@ def test_reserved_context_binding_names_are_rejected(inspect_source, run_script,
     assert result.err == err
 
 
-def test_llm_stub_on_plain_context_says_how_to_declare_it(run_script):
-    result = run_script(source("pass", "ctx.llm"))
+def test_ai_stub_on_plain_context_says_how_to_declare_it(run_script):
+    result = run_script(source("pass", "ctx.ai"))
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
-        "NotAvailableError: ctx.llm is not available: declare `llm: LLM` in your Ctx"
+        "NotAvailableError: ctx.ai is not available: declare `ai: AI` in your Ctx"
     )

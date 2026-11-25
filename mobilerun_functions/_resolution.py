@@ -9,13 +9,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ._adapters.ai import AIAdapter, ai_base_url
 from ._adapters.credentials import CredentialsAdapter, read_cloud, read_file
 from ._adapters.device import DeviceAdapter
-from ._adapters.llm import LLMAdapter, llm_base_url
 from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import CloudTasks, RunTasks
 from ._connection import Connection
-from .bindings import LLM, Credentials, Mailbox, Proxy, Tasks
+from .bindings import AI, Credentials, Mailbox, Proxy, Tasks
 from .context import Context, DeviceTarget, RunInfo
 from .device import connect_device
 from .entry import EntryPoint
@@ -97,9 +97,9 @@ async def _resolve(
                 value = ProxyAdapter(client, ctx.run.device_id)
             elif item.interface is Tasks:
                 continue  # Built below: it needs the device binding.
-            elif item.interface is LLM:
+            elif item.interface is AI:
                 base_url, api_key = connection.require_cloud(member)
-                value = LLMAdapter(llm_base_url(base_url), api_key)
+                value = AIAdapter(ai_base_url(base_url), api_key)
             else:
                 core = await _device(ctx, connection)
                 if hasattr(core, "close"):

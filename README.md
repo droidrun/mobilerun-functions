@@ -14,7 +14,7 @@ which needs `by_name` validation from pydantic 2.11).
 pip install mobilerun-functions
 ```
 
-For device control add the extra: `pip install "mobilerun-functions[device]"`. For `ctx.llm.openai()` add `[llm]` (`openai>=3,<4`).
+For device control add the extra: `pip install "mobilerun-functions[device]"`. For `ctx.ai.openai()` add `[ai]` (`openai>=3,<4`).
 
 ## Hello
 
@@ -225,12 +225,12 @@ partial result, and use `ctx.state` to carry data to the next run.
 
 Declare what the function needs using interface types in a `Context` subclass. The runner
 provides implementations before `main`; the function file stays the same locally and in the
-cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, `Tasks`, and `LLM` are structural Python
+cloud. `Device`, `Credentials`, `Mailbox`, `Proxy`, `Tasks`, and `AI` are structural Python
 Protocols. The temporary adapters will be replaced by the framework factory.
 
 ```python
 from pydantic import BaseModel, Field
-from mobilerun_functions import Context, Device, Credentials, LLM, Mailbox, Proxy, Tasks, binding, script
+from mobilerun_functions import Context, Device, Credentials, AI, Mailbox, Proxy, Tasks, binding, script
 
 class Input(BaseModel):
     mailbox_id: str = Field(json_schema_extra={"format": "mobilerun-mailbox"})
@@ -242,7 +242,7 @@ class Ctx(Context):
     email: Mailbox = binding(input="mailbox_id")
     proxy: Proxy = binding(input="proxy_id")
     tasks: Tasks
-    llm: LLM
+    ai: AI
 
 @script
 async def main(input: Input, ctx: Ctx) -> None:
@@ -262,7 +262,7 @@ implementation, other field type, or concrete instance in `Ctx` fails `inspect` 
 `inspect` always emits `requires`, including for legacy scripts and scripts without `ctx`:
 
 ```json
-{"device": true, "credentials": ["com.example.app"], "mailbox": true, "proxy": true, "tasks": true, "llm": true}
+{"device": true, "credentials": ["com.example.app"], "mailbox": true, "proxy": true, "tasks": true, "ai": true}
 ```
 
 Packages are sorted and unique. Legacy scripts and scripts without `ctx` get all false and
@@ -319,10 +319,10 @@ preserving leading zeros. Proxy resolution requires a cloud device (`--cloud` or
 `--device-target cloud`) and connects the supplied existing proxy to the run's `--device-id` through the device proxy endpoint and **leaves it connected** after the run.
 No resource is bought, created, or deleted during resolution.
 
-Declaring `llm: LLM` (`binding()` only, at most one) gives an OpenAI-compatible client for the
-platform LLM: `ctx.llm.base_url` (the API base URL plus `/llm`, for example `https://api.mobilerun.ai/v1/llm`), `ctx.llm.api_key` (a bearer for that base URL
-only) and `ctx.llm.openai()`, a new `openai.AsyncOpenAI` for it (needs `mobilerun-functions[llm]`,
-else `NotAvailableError("llm", "install mobilerun-functions[llm]")`). `llm` is the one binding
+Declaring `ai: AI` (`binding()` only, at most one) gives an OpenAI-compatible client for the
+platform AI: `ctx.ai.base_url` (the API base URL plus `/ai`, for example `https://api.mobilerun.ai/v1/ai`), `ctx.ai.api_key` (a bearer for that base URL
+only) and `ctx.ai.openai()`, a new `openai.AsyncOpenAI` for it (needs `mobilerun-functions[ai]`,
+else `NotAvailableError("ai", "install mobilerun-functions[ai]")`). `ai` is the one binding
 that is cloud in both modes: it always calls the Mobilerun gateway, with your own key locally
 (`MOBILERUN_API_KEY`, base URL defaulting as above) and with the platform's run credentials in
 the cloud, where `api_key` is only a placeholder. Resolution makes no network call. Scoped
@@ -330,7 +330,7 @@ API keys are refused by the gateway, and usage is billed to the run's organizati
 the function author. A missing key fails the run before `main`.
 
 ```python
-client = ctx.llm.openai()
+client = ctx.ai.openai()
 reply = await client.chat.completions.create(
     model="openai/gpt-4o", messages=[{"role": "user", "content": "Hello"}],
 )
@@ -387,7 +387,7 @@ No ctx method buys, creates, or deletes resources. Tasks consume usage like any 
 | `dataset.push(item)` | Validates and emits an item for a dataset entry point; buffers without a file. |
 | `partial(reason)` | Marks a successful run incomplete; the last reason wins. |
 | `device()` | Deprecated: connects once and returns the run's `mobilerun_core.Device`; see below. |
-| `credentials` / `files` / `llm` | Legacy stubs raise `NotAvailableError`; declare `credentials` or `llm` in your `Ctx` to get the binding. |
+| `credentials` / `files` / `ai` | Legacy stubs raise `NotAvailableError`; declare `credentials` or `ai` in your `Ctx` to get the binding. |
 
 ### Control the device
 

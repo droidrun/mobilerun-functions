@@ -627,91 +627,101 @@ def test_tasks_may_be_declared_before_the_device(sdk, core, run_script):
     assert json.loads(requests[0].content)["deviceId"] == "dev-1"
 
 
-# ctx.llm
+# ctx.ai
 
 
-LLM_SCRIPT = 'print(ctx.llm.base_url, ctx.llm.api_key)'
+AI_SCRIPT = 'print(ctx.ai.base_url, ctx.ai.api_key)'
 
 
-def test_local_llm_uses_the_users_key_and_resolves_without_network(sdk, run_script):
+def test_local_ai_uses_the_users_key_and_resolves_without_network(sdk, run_script):
     _, requests = sdk
-    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    result = run_script(source("ai: AI", AI_SCRIPT))
     assert result.code == 0, result.err
-    assert result.out == "https://api.example.test/v1/llm test-key\n"
+    assert result.out == "https://api.example.test/v1/ai test-key\n"
     assert requests == []
 
 
-def test_local_llm_defaults_to_the_public_gateway(sdk, monkeypatch, run_script):
+def test_local_ai_defaults_to_the_public_gateway(sdk, monkeypatch, run_script):
     monkeypatch.delenv("MOBILERUN_BASE_URL")
-    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    result = run_script(source("ai: AI", AI_SCRIPT))
     assert result.code == 0, result.err
-    assert result.out == "https://api.mobilerun.ai/v1/llm test-key\n"
+    assert result.out == "https://api.mobilerun.ai/v1/ai test-key\n"
 
 
-def test_platform_llm_uses_the_injected_base_url_and_placeholder_key(sdk, monkeypatch, run_script):
+def test_platform_ai_uses_the_injected_base_url_and_placeholder_key(sdk, monkeypatch, run_script):
     monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", "cloud")
     monkeypatch.setenv("MOBILERUN_BASE_URL", "https://api.dev.example.test/v1/")
     monkeypatch.setenv("MOBILERUN_API_KEY", "placeholder-key")
-    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    result = run_script(source("ai: AI", AI_SCRIPT))
     assert result.code == 0, result.err
-    assert result.out == "https://api.dev.example.test/v1/llm placeholder-key\n"
+    assert result.out == "https://api.dev.example.test/v1/ai placeholder-key\n"
 
 
-def test_cloud_flag_llm_is_the_same_gateway(sdk, monkeypatch, run_script):
+def test_cloud_flag_ai_is_the_same_gateway(sdk, monkeypatch, run_script):
     monkeypatch.delenv("MOBILERUN_BASE_URL")
-    result = run_script(source("llm: LLM", LLM_SCRIPT), extra_args=["--cloud"])
+    result = run_script(source("ai: AI", AI_SCRIPT), extra_args=["--cloud"])
     assert result.code == 0, result.err
-    assert result.out == "https://api.mobilerun.ai/v1/llm test-key\n"
+    assert result.out == "https://api.mobilerun.ai/v1/ai test-key\n"
 
 
 @pytest.mark.parametrize("platform_env", [None, "cloud"])
-def test_llm_without_key_fails_before_main(sdk, monkeypatch, run_script, platform_env):
+def test_ai_without_key_fails_before_main(sdk, monkeypatch, run_script, platform_env):
     if platform_env:
         monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", platform_env)
     monkeypatch.delenv("MOBILERUN_API_KEY")
-    result = run_script(source("llm: LLM", 'print("MAIN")'))
+    result = run_script(source("ai: AI", 'print("MAIN")'))
     assert result.code == 1
-    assert result.envelope["error"]["message"] == "NotAvailableError: ctx.llm set MOBILERUN_API_KEY"
+    assert result.envelope["error"]["message"] == "NotAvailableError: ctx.ai set MOBILERUN_API_KEY"
     assert result.out == ""
 
 
-def test_platform_llm_without_base_url_fails_before_main(sdk, monkeypatch, run_script):
+def test_platform_ai_without_base_url_fails_before_main(sdk, monkeypatch, run_script):
     monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", "cloud")
     monkeypatch.delenv("MOBILERUN_BASE_URL")
-    result = run_script(source("llm: LLM", 'print("MAIN")'))
+    result = run_script(source("ai: AI", 'print("MAIN")'))
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
-        "NotAvailableError: ctx.llm set MOBILERUN_BASE_URL"
+        "NotAvailableError: ctx.ai set MOBILERUN_BASE_URL"
     )
 
 
-def test_llm_does_not_need_the_device_sdk(sdk, monkeypatch, run_script):
+def test_ai_does_not_need_the_device_sdk(sdk, monkeypatch, run_script):
     monkeypatch.setitem(sys.modules, "mobilerun_sdk", None)
-    result = run_script(source("llm: LLM", LLM_SCRIPT))
+    result = run_script(source("ai: AI", AI_SCRIPT))
     assert result.code == 0, result.err
 
 
-def test_llm_openai_returns_a_client_for_the_gateway(sdk, run_script):
+def test_ai_openai_returns_a_client_for_the_gateway(sdk, run_script):
     result = run_script(source(
-        "llm: LLM",
-        'c = ctx.llm.openai(); print(type(c).__name__, c.base_url, c.api_key)',
+        "ai: AI",
+        'c = ctx.ai.openai(); print(type(c).__name__, c.base_url, c.api_key)',
     ))
     assert result.code == 0, result.err
-    assert result.out == "AsyncOpenAI https://api.example.test/v1/llm/ test-key\n"
+    assert result.out == "AsyncOpenAI https://api.example.test/v1/ai/ test-key\n"
 
 
-def test_llm_openai_names_the_extra_when_it_is_missing(sdk, monkeypatch, run_script):
+def test_ai_openai_names_the_extra_when_it_is_missing(sdk, monkeypatch, run_script):
     monkeypatch.setitem(sys.modules, "openai", None)
-    result = run_script(source("llm: LLM", "ctx.llm.openai()"))
+    result = run_script(source("ai: AI", "ctx.ai.openai()"))
     assert result.code == 1
     assert result.envelope["error"]["message"] == (
-        "NotAvailableError: ctx.llm install mobilerun-functions[llm]"
+        "NotAvailableError: ctx.ai install mobilerun-functions[ai]"
     )
 
 
-def test_llm_adapter_repr_hides_the_key():
-    from mobilerun_functions._adapters.llm import LLMAdapter
+def test_ai_adapter_repr_hides_the_key():
+    from mobilerun_functions._adapters.ai import AIAdapter
 
-    text = repr(LLMAdapter("https://api.example.test/v1", "secret-key"))
+    text = repr(AIAdapter("https://api.example.test/v1", "secret-key"))
     assert "secret-key" not in text
     assert "https://api.example.test/v1" in text
+
+
+def test_old_name_is_gone(sdk, run_script):
+    old = "l" + "lm"
+    result = run_script(source(f"{old}: {old.upper()}", 'print("MAIN")'))
+    assert result.code != 0
+    assert "MAIN" not in result.out
+    ai = run_script(source("ai: AI", AI_SCRIPT))
+    assert f"/v1/{old}" not in ai.out
+    assert "/v1/ai" in ai.out

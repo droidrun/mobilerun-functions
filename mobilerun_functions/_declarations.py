@@ -7,7 +7,7 @@ from typing import Any, get_type_hints
 
 from pydantic import BaseModel
 
-from .bindings import LLM, Binding, Credentials, Device, Mailbox, Proxy, Tasks
+from .bindings import AI, Binding, Credentials, Device, Mailbox, Proxy, Tasks
 from .context import _BINDING_OVERRIDES, Context, RunInfo
 from .errors import EntryPointError
 from .schema import MAILBOX_FORMAT, PROXY_FORMAT
@@ -16,7 +16,7 @@ _RESERVED_CONTEXT_MEMBERS = (
     vars(Context).keys() | vars(Context(RunInfo())).keys()
 ) - _BINDING_OVERRIDES
 
-INTERFACES = (Device, Credentials, Mailbox, Proxy, Tasks, LLM)
+INTERFACES = (Device, Credentials, Mailbox, Proxy, Tasks, AI)
 _IMPLEMENTATION_HINT = (
     "the implementation belongs in the local configuration; "
     "declare the interface type with binding(...)"
@@ -106,5 +106,5 @@ def requirements(items: tuple[Declaration, ...]) -> dict[str, Any]:
         "mailbox": Mailbox in interfaces,
         "proxy": Proxy in interfaces,
         "tasks": Tasks in interfaces,
-        "llm": LLM in interfaces,
+        "ai": AI in interfaces,
     }

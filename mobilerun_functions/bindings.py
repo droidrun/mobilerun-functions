@@ -75,15 +75,15 @@ class Proxy(Protocol):
     async def status(self) -> dict[str, Any]: ...
 
 
-class LLM(Protocol):
-    """OpenAI-compatible access to the platform LLM, billed to the run's organization."""
+class AI(Protocol):
+    """OpenAI-compatible access to the platform AI, billed to the run's organization."""
 
     @property
     def base_url(self) -> str: ...
     @property
     def api_key(self) -> str: ...
     def openai(self) -> openai.AsyncOpenAI:
-        """A new client for `base_url`; needs `mobilerun-functions[llm]`."""
+        """A new client for `base_url`; needs `mobilerun-functions[ai]`."""
         ...
 
 

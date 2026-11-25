@@ -263,7 +263,7 @@ for name, get in [
     ("device", lambda: ctx.device()),
     ("credentials", lambda: ctx.credentials),
     ("files", lambda: ctx.files),
-    ("llm", lambda: ctx.llm),
+    ("ai", lambda: ctx.ai),
 ]:
     try:
         get()
@@ -282,7 +282,7 @@ RUN_INFO = (
 def test_context_members_not_available(run_script):
     r = run_script(script_source(CONTEXT_MEMBERS))
     assert r.code == 0
-    assert r.envelope["result"] == {"greeting": "device,credentials,files,llm"}
+    assert r.envelope["result"] == {"greeting": "device,credentials,files,ai"}
 
 
 def test_run_info_from_flags(run_script):
