@@ -109,8 +109,10 @@ class RunTasks(_Tasks):
             await self._client.post(f"{task_path}/cancel", cast_to=object)
 
         state: Any = await _poll(fetch, stop, timeout)
+        # The public task id (readable with /v1/tasks); the run-task id only if no task started.
+        public_id = state.get("taskId") or task_id
         return _execution_result(
-            task_id, output, state.get("succeeded"), state.get("message"),
+            public_id, output, state.get("succeeded"), state.get("message"),
             state.get("output"), state.get("steps"),
         )
 

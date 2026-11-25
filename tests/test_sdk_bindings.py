@@ -439,13 +439,14 @@ def test_platform_tasks_go_through_the_run_routes_and_poll(platform, run_script)
         (200, run_task("running")),
         (200, run_task(
             "completed", succeeded=True, message="done", output={"answer": "ready"}, steps=4,
+            taskId="task-9",
         )),
     ])
     result = run_script(tasks_script("output=Answer, max_steps=8"), extra_args=PLATFORM_ARGS)
     assert result.code == 0, result.err
     assert json.loads(result.out) == {
         "success": True, "answer": "done", "output": {"answer": "ready"}, "steps": 4,
-        "task_id": "run-task-1", "trajectory_path": None, "device": "CloudDevice",
+        "task_id": "task-9", "trajectory_path": None, "device": "CloudDevice",
     }
     assert [(request.method, request.url.path) for request in requests] == [
         ("POST", "/v1/compute/runs/run-1/tasks"),
@@ -459,6 +460,15 @@ def test_platform_tasks_go_through_the_run_routes_and_poll(platform, run_script)
         "task": "read screen", "deviceId": "dev-1", "maxSteps": 8,
     }
     assert set(body) == {"task", "deviceId", "outputSchema", "maxSteps"}
+
+
+def test_platform_task_without_a_started_task_keeps_the_run_task_id(platform, run_script):
+    responses, _ = platform
+    lost = run_task("failed", succeeded=False, message="lost")
+    responses.extend([(202, run_task()), (200, lost)])
+    result = run_script(tasks_script(), extra_args=PLATFORM_ARGS)
+    assert result.code == 0, result.err
+    assert json.loads(result.out)["task_id"] == "run-task-1"
 
 
 def test_platform_task_key_is_new_per_call(platform, run_script):
