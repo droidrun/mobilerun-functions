@@ -627,7 +627,7 @@ def test_local_llm_uses_the_users_key_and_resolves_without_network(sdk, run_scri
     _, requests = sdk
     result = run_script(source("llm: LLM", LLM_SCRIPT))
     assert result.code == 0, result.err
-    assert result.out == "https://api.example.test/v1 test-key\n"
+    assert result.out == "https://api.example.test/v1/llm test-key\n"
     assert requests == []
 
 
@@ -635,23 +635,23 @@ def test_local_llm_defaults_to_the_public_gateway(sdk, monkeypatch, run_script):
     monkeypatch.delenv("MOBILERUN_BASE_URL")
     result = run_script(source("llm: LLM", LLM_SCRIPT))
     assert result.code == 0, result.err
-    assert result.out == "https://api.mobilerun.ai/v1 test-key\n"
+    assert result.out == "https://api.mobilerun.ai/v1/llm test-key\n"
 
 
 def test_platform_llm_uses_the_injected_base_url_and_placeholder_key(sdk, monkeypatch, run_script):
     monkeypatch.setenv("MOBILERUN_FUNCTIONS_ENV", "cloud")
-    monkeypatch.setenv("MOBILERUN_BASE_URL", "https://api.dev.example.test/v1")
+    monkeypatch.setenv("MOBILERUN_BASE_URL", "https://api.dev.example.test/v1/")
     monkeypatch.setenv("MOBILERUN_API_KEY", "placeholder-key")
     result = run_script(source("llm: LLM", LLM_SCRIPT))
     assert result.code == 0, result.err
-    assert result.out == "https://api.dev.example.test/v1 placeholder-key\n"
+    assert result.out == "https://api.dev.example.test/v1/llm placeholder-key\n"
 
 
 def test_cloud_flag_llm_is_the_same_gateway(sdk, monkeypatch, run_script):
     monkeypatch.delenv("MOBILERUN_BASE_URL")
     result = run_script(source("llm: LLM", LLM_SCRIPT), extra_args=["--cloud"])
     assert result.code == 0, result.err
-    assert result.out == "https://api.mobilerun.ai/v1 test-key\n"
+    assert result.out == "https://api.mobilerun.ai/v1/llm test-key\n"
 
 
 @pytest.mark.parametrize("platform_env", [None, "cloud"])
@@ -687,7 +687,7 @@ def test_llm_openai_returns_a_client_for_the_gateway(sdk, run_script):
         'c = ctx.llm.openai(); print(type(c).__name__, c.base_url, c.api_key)',
     ))
     assert result.code == 0, result.err
-    assert result.out == "AsyncOpenAI https://api.example.test/v1/ test-key\n"
+    assert result.out == "AsyncOpenAI https://api.example.test/v1/llm/ test-key\n"
 
 
 def test_llm_openai_names_the_extra_when_it_is_missing(sdk, monkeypatch, run_script):

@@ -10,6 +10,13 @@ from ..errors import NotAvailableError
 if TYPE_CHECKING:
     import openai
 
+# The gateway's OpenAI-compatible surface sits under the API base URL (`/v1/llm`).
+LLM_PATH = "/llm"
+
+
+def llm_base_url(api_base_url: str) -> str:
+    return api_base_url.rstrip("/") + LLM_PATH
+
 
 @dataclass(frozen=True)
 class LLMAdapter:

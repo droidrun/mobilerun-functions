@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from ._adapters.credentials import CredentialsAdapter, read_cloud, read_file
 from ._adapters.device import DeviceAdapter
-from ._adapters.llm import LLMAdapter
+from ._adapters.llm import LLMAdapter, llm_base_url
 from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import CloudTasks, RunTasks
 from ._connection import Connection
@@ -99,7 +99,7 @@ async def _resolve(
                 continue  # Built below: it needs the device binding.
             elif item.interface is LLM:
                 base_url, api_key = connection.require_cloud(member)
-                value = LLMAdapter(base_url, api_key)
+                value = LLMAdapter(llm_base_url(base_url), api_key)
             else:
                 core = await _device(ctx, connection)
                 if hasattr(core, "close"):

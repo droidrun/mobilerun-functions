@@ -320,7 +320,7 @@ preserving leading zeros. Proxy resolution requires a cloud device (`--cloud` or
 No resource is bought, created, or deleted during resolution.
 
 Declaring `llm: LLM` (`binding()` only, at most one) gives an OpenAI-compatible client for the
-platform LLM: `ctx.llm.base_url` (ends in `/v1`), `ctx.llm.api_key` (a bearer for that base URL
+platform LLM: `ctx.llm.base_url` (the API base URL plus `/llm`, for example `https://api.mobilerun.ai/v1/llm`), `ctx.llm.api_key` (a bearer for that base URL
 only) and `ctx.llm.openai()`, a new `openai.AsyncOpenAI` for it (needs `mobilerun-functions[llm]`,
 else `NotAvailableError("llm", "install mobilerun-functions[llm]")`). `llm` is the one binding
 that is cloud in both modes: it always calls the Mobilerun gateway, with your own key locally
