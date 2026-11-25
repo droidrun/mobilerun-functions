@@ -388,13 +388,13 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+ai = [
+    { name = "openai" },
+]
 device = [
     { name = "mobilerun-core" },
     { name = "mobilerun-sdk" },
     { name = "pyyaml" },
-]
-llm = [
-    { name = "openai" },
 ]
 local = [
     { name = "mobilerun-core", extra = ["local"] },
@@ -412,14 +412,14 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "mobilerun-core", marker = "extra == 'device'", specifier = ">=1.10.1,<2" },
+    { name = "mobilerun-core", marker = "extra == 'device'", specifier = ">=1.12.0,<2" },
     { name = "mobilerun-core", extras = ["local"], marker = "extra == 'local'", specifier = ">=1.12.0,<2" },
     { name = "mobilerun-sdk", marker = "extra == 'device'", specifier = ">=6.3.1,<7" },
     { name = "openai", marker = "extra == 'ai'", specifier = ">=3,<4" },
     { name = "pydantic", specifier = ">=2.11" },
     { name = "pyyaml", marker = "extra == 'device'", specifier = ">=6" },
 ]
-provides-extras = ["device", "local", "ai"]
+provides-extras = ["ai", "device", "local"]
 
 [package.metadata.requires-dev]
 dev = [
