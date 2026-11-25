@@ -8,6 +8,7 @@ import sys
 import types
 import uuid
 from collections import deque
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import httpx
@@ -50,14 +51,8 @@ def core(monkeypatch):
     return core
 
 
-def credentials_page(items, *, has_next=False):
-    return {
-        "items": items,
-        "pagination": {
-            "hasNext": has_next, "hasPrev": False, "page": 1,
-            "pages": 2, "pageSize": 100, "total": 2,
-        },
-    }
+def package_list(items):
+    return {"data": items}
 
 
 def credential(package="com.example", name="work", value="vault-secret"):
@@ -69,43 +64,135 @@ def credential(package="com.example", name="work", value="vault-secret"):
     }
 
 
-def test_cloud_credentials_are_paginated_filtered_and_never_return_values(sdk, run_script):
+def test_cloud_credentials_read_only_the_declared_packages(sdk, run_script):
     responses, requests = sdk
     responses.extend([
-        (200, credentials_page([credential("com.other")], has_next=True)),
-        (200, credentials_page([credential()])),
+        (200, package_list([credential("com.example")])),
+        (200, package_list([credential("com.second", "other", "second-secret")])),
     ])
+    result = run_script(source(
+        'vault: Credentials = binding(package="com.example")\n'
+        'second: Credentials = binding(package="com.second")',
+        'print(await ctx.vault.list())\n    print(await ctx.second.list())',
+    ), extra_args=["--cloud"])
+    assert result.code == 0, result.err
+    assert result.out.splitlines() == [
+        "[{'package': 'com.example', 'name': 'work', 'fields': ['password']}]",
+        "[{'package': 'com.second', 'name': 'other', 'fields': ['password']}]",
+    ]
+    assert [request.url.path for request in requests] == [
+        "/v1/credentials/packages/com.example", "/v1/credentials/packages/com.second",
+    ]
+    assert requests[0].headers["authorization"] == "Bearer test-key"
+    secrets = "vault-secret second-secret"
+    assert not any(word in result.out + result.err + json.dumps(result.envelope)
+                   for word in secrets.split())
+    assert not responses
+
+
+def test_cloud_credentials_never_use_the_org_wide_list(sdk, run_script):
+    responses, requests = sdk
+    responses.append((200, package_list([credential()])))
+    result = run_script(source(
+        'vault: Credentials = binding(package="com.example")', 'print("MAIN")',
+    ), extra_args=["--cloud"])
+    assert result.code == 0, result.err
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", "/v1/credentials/packages/com.example"),
+    ]
+
+
+def test_cloud_credentials_drop_entries_of_an_undeclared_package(sdk, run_script):
+    responses, _ = sdk
+    responses.append((200, package_list([
+        credential("com.undeclared", "leak", "undeclared-secret"), credential(),
+    ])))
     result = run_script(source(
         'vault: Credentials = binding(package="com.example")',
         'print(await ctx.vault.list())',
     ), extra_args=["--cloud"])
     assert result.code == 0, result.err
-    assert result.out.strip() == (
-        "[{'package': 'com.example', 'name': 'work', 'fields': ['password']}]"
+    assert result.out == "[{'package': 'com.example', 'name': 'work', 'fields': ['password']}]\n"
+    assert "undeclared-secret" not in result.out + result.err + json.dumps(result.envelope)
+
+
+def test_read_cloud_keeps_only_the_declared_package_in_memory():
+    from mobilerun_functions._adapters.credentials import read_cloud
+
+    async def handle(request):
+        return httpx.Response(200, json=package_list([
+            credential("com.undeclared", "leak", "undeclared-secret"), credential(),
+        ]))
+
+    client = SDKClient(
+        api_key="test-key", base_url="https://api.example.test/v1", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
     )
-    assert [request.url.params["page"] for request in requests] == ["1", "2"]
-    assert [request.url.path for request in requests] == ["/v1/credentials", "/v1/credentials"]
-    assert requests[0].headers["authorization"] == "Bearer test-key"
-    assert "vault-secret" not in result.out + result.err + json.dumps(result.envelope)
-    assert not responses
+    items = asyncio.run(read_cloud(client, "com.example"))
+    assert [(item.package, item.name) for item in items] == [("com.example", "work")]
 
 
 def test_cloud_credential_typing_never_returns_a_secret(sdk, core, run_script):
     responses, requests = sdk
-    responses.append((200, credentials_page([credential()])))
+    responses.append((200, package_list([credential()])))
     typed = []
     core.device = focused_device(type=lambda text, **kw: typed.append(text))
     result = run_script(source(
         'device: Device\nvault: Credentials = binding(package="com.example")',
-        'print(await ctx.vault.type_field(ctx.device, None, "password"))',
+        'print(await ctx.vault.type_field(ctx.device, "password"))',
     ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
     assert typed == ["vault-secret"]
     assert result.out == "None\n"
     assert "vault-secret" not in result.out + result.err + json.dumps(result.envelope)
     assert [(request.method, request.url.path) for request in requests] == [
-        ("GET", "/v1/credentials"),
+        ("GET", "/v1/credentials/packages/com.example"),
     ]
+
+
+def test_bound_type_field_refuses_an_unknown_field_without_typing(sdk, core, run_script):
+    responses, _ = sdk
+    responses.append((200, package_list([credential()])))
+    typed = []
+    core.device = focused_device(type=lambda text, **kw: typed.append(text))
+    result = run_script(source(
+        'device: Device\nvault: Credentials = binding(package="com.example")',
+        'await ctx.vault.type_field(ctx.device, "username")',
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.credentials credential field not found"
+    )
+    assert typed == []
+    assert "vault-secret" not in result.err + json.dumps(result.envelope)
+
+
+def test_bound_type_field_refuses_an_unknown_name_without_typing(sdk, core, run_script):
+    responses, _ = sdk
+    responses.append((200, package_list([credential()])))
+    typed = []
+    core.device = focused_device(type=lambda text, **kw: typed.append(text))
+    result = run_script(source(
+        'device: Device\nvault: Credentials = binding(package="com.example")',
+        'await ctx.vault.type_field(ctx.device, "password", name="absent")',
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.credentials credential field not found"
+    )
+    assert typed == []
+
+
+def test_bound_type_field_has_no_package_argument(sdk, core, run_script):
+    responses, _ = sdk
+    responses.append((200, package_list([credential()])))
+    core.device = focused_device(type=lambda text, **kw: None)
+    result = run_script(source(
+        'device: Device\nvault: Credentials = binding(package="com.example")',
+        'await ctx.vault.type_field(ctx.device, "com.example", "password")',
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
+    assert result.code == 1
+    assert "TypeError" in result.envelope["error"]["message"]
 
 
 def test_local_mailbox_reads_address_and_waits_for_otp(sdk, run_script):
@@ -127,6 +214,9 @@ def test_local_mailbox_reads_address_and_waits_for_otp(sdk, run_script):
         ("GET", "/v1/mailboxes/mailbox-1"), ("GET", "/v1/mailboxes/mailbox-1/otp"),
     ]
     assert requests[1].url.params["sender"] == "sender@example.test"
+    baseline = datetime.fromisoformat(requests[1].url.params["after"])
+    assert baseline.utcoffset() == timedelta(0)
+    assert abs(datetime.now(UTC) - baseline) < timedelta(minutes=1)
 
 
 def test_local_mailbox_without_key_fails_before_main(sdk, monkeypatch, run_script):
@@ -142,13 +232,13 @@ def test_local_mailbox_without_key_fails_before_main(sdk, monkeypatch, run_scrip
     assert requests == []
 
 
-def test_proxy_connects_existing_id_only_and_leaves_it_connected(sdk, run_script):
+def test_proxy_connects_existing_id_only_and_leaves_it_connected(sdk, core, run_script):
     responses, requests = sdk
     responses.extend([(204, None), (200, {"connected": True})])
     result = run_script(source(
-        'proxy: Proxy = binding(input="proxy_id")',
+        'device: Device\nproxy: Proxy = binding(input="proxy_id")',
         'print(await ctx.proxy.status())',
-    ), extra_args=["--device-id", "dev-1"])
+    ), extra_args=["--cloud", "--device-id", "dev-1"])
     assert result.code == 0, result.err
     assert result.out == (
         "{'connected': True, 'name': None, 'protocol': None, '$schema': None}\n"
@@ -287,6 +377,112 @@ def test_mailbox_polls_after_no_code_and_forwards_after(sdk, monkeypatch, run_sc
     pause.assert_awaited_once_with(2.0)
 
 
+OTP_OK = {"data": {
+    "code": "0042", "confidence": "high", "messageId": "message-1",
+    "receivedAt": "2026-11-25T12:00:00Z",
+}}
+WAIT_BEGAN = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+
+
+def mailbox_with(statuses, clock=lambda: WAIT_BEGAN):
+    """A MailboxAdapter on the real SDK; `statuses` is the scripted OTP response sequence."""
+    from mobilerun_functions._adapters.resources import MailboxAdapter
+
+    requests = []
+    script = deque(statuses)
+
+    async def handle(request):
+        requests.append(request)
+        status = script.popleft()
+        return httpx.Response(status, json=OTP_OK if status == 200 else {"error": "x"})
+
+    client = SDKClient(
+        api_key="test-key", base_url="https://api.example.test/v1", max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+    return MailboxAdapter(client, "mailbox-1", None, clock=clock), requests, script
+
+
+@pytest.fixture
+def pause(monkeypatch):
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    return sleep
+
+
+def test_mailbox_wait_sends_one_aware_baseline_on_every_poll(pause):
+    ticks = iter([WAIT_BEGAN, WAIT_BEGAN + timedelta(minutes=5)])
+    mailbox, requests, _ = mailbox_with([204, 204, 200], clock=lambda: next(ticks))
+    assert asyncio.run(mailbox.wait_for_code()) == "0042"
+    baselines = [request.url.params["after"] for request in requests]
+    assert baselines == ["2026-11-25T12:00:00+00:00"] * 3
+    assert "sender" not in requests[0].url.params
+    assert pause.await_count == 2
+
+
+def test_mailbox_wait_forwards_sender_and_after_exactly(pause):
+    after = datetime(2026, 11, 25, 9, 30, tzinfo=UTC)
+    mailbox, requests, _ = mailbox_with([200])
+    asyncio.run(mailbox.wait_for_code(sender="no-reply@example.test", after=after))
+    assert requests[0].url.params["sender"] == "no-reply@example.test"
+    assert requests[0].url.params["after"] == "2026-11-25T09:30:00+00:00"
+
+
+def test_mailbox_default_clock_is_aware_utc():
+    from mobilerun_functions._adapters.resources import _utc_now
+
+    assert _utc_now().utcoffset() == timedelta(0)
+
+
+@pytest.mark.parametrize("status,error", [
+    (404, "NotFoundError"), (409, "ConflictError"), (401, "AuthenticationError"),
+    (403, "PermissionDeniedError"),
+])
+def test_mailbox_wait_fails_immediately_on_error_status(pause, status, error):
+    import mobilerun_sdk
+
+    mailbox, requests, script = mailbox_with([status, 200])
+    with pytest.raises(getattr(mobilerun_sdk, error)):
+        asyncio.run(mailbox.wait_for_code())
+    assert len(requests) == 1 and list(script) == [200]
+    pause.assert_not_awaited()
+
+
+def test_mailbox_wait_stops_polling_at_the_deadline(monkeypatch):
+    monkeypatch.setattr("mobilerun_functions._adapters.resources.POLL_INTERVAL", 0.005)
+    mailbox, requests, _ = mailbox_with([204] * 10_000)
+    with pytest.raises(TimeoutError):
+        asyncio.run(mailbox.wait_for_code(timeout=0.05))
+    polled = len(requests)
+    assert 1 < polled < 10_000
+
+
+def test_mailbox_wait_returns_a_code_that_arrives_before_the_deadline(monkeypatch):
+    monkeypatch.setattr("mobilerun_functions._adapters.resources.POLL_INTERVAL", 0.005)
+    mailbox, requests, _ = mailbox_with([204, 204, 200])
+    assert asyncio.run(mailbox.wait_for_code(timeout=5)) == "0042"
+    assert len(requests) == 3
+
+
+def test_mailbox_wait_stops_polling_when_cancelled(monkeypatch):
+    monkeypatch.setattr("mobilerun_functions._adapters.resources.POLL_INTERVAL", 0.005)
+    mailbox, requests, _ = mailbox_with([204] * 10_000)
+
+    async def exercise():
+        waiting = asyncio.create_task(mailbox.wait_for_code(timeout=60))
+        while not requests:
+            await asyncio.sleep(0.001)
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        stopped = len(requests)
+        await asyncio.sleep(0.05)
+        return stopped, len(requests)
+
+    stopped, later = asyncio.run(exercise())
+    assert stopped == later
+
+
 def test_task_polls_through_running_until_terminal(sdk, core, monkeypatch, run_script):
     from unittest.mock import AsyncMock
 
@@ -340,7 +536,8 @@ def test_local_proxy_fails_before_building_any_client(sdk, monkeypatch, run_scri
     built = []
     monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: built.append(kw))
     result = run_script(source(
-        'email: Mailbox = binding(input="mailbox_id")\nproxy: Proxy = binding(input="proxy_id")',
+        'device: Device\nemail: Mailbox = binding(input="mailbox_id")\n'
+        'proxy: Proxy = binding(input="proxy_id")',
         'print("MAIN")',
     ), extra_args=["--device-target", "local", "--device-id", "emulator-5554"])
     assert result.code == 1
@@ -393,7 +590,7 @@ def test_credential_read_failure_remains_opaque_and_names_binding(sdk, run_scrip
     payload = credential()
     payload["fields"] = None
     payload["sensitive"] = "vault-secret"
-    responses.append((200, credentials_page([payload])))
+    responses.append((200, package_list([payload])))
     result = run_script(source('vault: Credentials = binding(package="com.example")'),
                         extra_args=["--cloud"])
     assert result.code == 1

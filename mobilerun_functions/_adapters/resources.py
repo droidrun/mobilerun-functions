@@ -3,17 +3,30 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from .tasks import POLL_INTERVAL
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 class MailboxAdapter:
-    def __init__(self, client: Any, mailbox_id: str, address: str | None) -> None:
+    def __init__(
+        self,
+        client: Any,
+        mailbox_id: str,
+        address: str | None,
+        *,
+        clock: Callable[[], datetime] = _utc_now,
+    ) -> None:
         self._client = client
         self._id = mailbox_id
         self._address = address
+        self._clock = clock
 
     @property
     def address(self) -> str | None:
@@ -26,21 +39,15 @@ class MailboxAdapter:
         timeout: float = 60,
         after: datetime | None = None,
     ) -> str:
-        from mobilerun_sdk import NotFoundError
-
-        params: dict[str, Any] = {}
+        # One baseline per wait, so a code that arrived before it is never returned.
+        params: dict[str, Any] = {"after": after if after is not None else self._clock()}
         if sender is not None:
             params["sender"] = sender
-        if after is not None:
-            params["after"] = after
         async with asyncio.timeout(timeout):
             while True:
-                try:
-                    raw = await self._client.mailboxes.with_raw_response.otp(self._id, **params)
-                except NotFoundError:
-                    raw = None
-                has_code = raw is not None and raw.status_code != 204
-                if has_code:
+                # 204 means no code yet; 404, 409 and auth errors propagate and end the wait.
+                raw = await self._client.mailboxes.with_raw_response.otp(self._id, **params)
+                if raw.status_code != 204:
                     response = await raw.parse()
                     return str(response.data.code)
                 await asyncio.sleep(POLL_INTERVAL)

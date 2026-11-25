@@ -62,6 +62,9 @@ def declarations(ctx: type[Context], input_model: type[BaseModel]) -> tuple[Decl
     missing_tasks_device = Tasks in seen and Device not in seen
     if missing_tasks_device:
         raise EntryPointError("tasks: requires a Device binding")
+    missing_proxy_device = Proxy in seen and Device not in seen
+    if missing_proxy_device:
+        raise EntryPointError("proxy: requires a Device binding")
     return tuple(result)
 
 

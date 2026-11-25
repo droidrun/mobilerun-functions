@@ -20,29 +20,23 @@ class Credential:
 
 
 class CredentialsAdapter:
+    """One declared package; entries of other packages never reach it."""
+
     def __init__(self, credentials: list[Credential], package: str) -> None:
+        self._package = package
         self._credentials = [item for item in credentials if item.package in (None, package)]
         if not self._credentials:
             raise NotAvailableError("credentials", "no credentials for the declared package")
 
-    async def list(self, package: str | None = None) -> list[dict[str, Any]]:
-        items = self._credentials
-        if package is not None:
-            items = [item for item in items if item.package == package]
+    async def list(self) -> list[dict[str, Any]]:
         return [
-            {"package": item.package, "name": item.name, "fields": list(item.fields)}
-            for item in items
+            {"package": self._package, "name": item.name, "fields": list(item.fields)}
+            for item in self._credentials
         ]
 
-    async def type_field(
-        self, device: Device, package: str | None, field: str, name: str | None = None
-    ) -> None:
+    async def type_field(self, device: Device, field: str, *, name: str | None = None) -> None:
         for item in self._credentials:
-            matches = (
-                (package is None or item.package == package)
-                and (name is None or item.name == name)
-                and field in item.fields
-            )
+            matches = (name is None or item.name == name) and field in item.fields
             if not matches:
                 continue
             phone_state = (await device.state.refresh()).phone_state
@@ -101,19 +95,14 @@ def _normalize(data: Any) -> list[Credential]:
     return result
 
 
-async def read_cloud(client: Any, packages: set[str]) -> list[Credential]:
-    result: list[Credential] = []
-    page = 1
-    while True:
-        response = await client.credentials.list(page=page, page_size=100)
-        result.extend(
-            Credential(
-                item.package_name, item.credential_name,
-                {f.field_type: f.value for f in item.fields},
-            )
-            for item in response.items
-            if item.package_name in packages
+async def read_cloud(client: Any, package: str) -> list[Credential]:
+    """Read one declared package; an org-wide list would put other packages' values in the run."""
+    response = await client.credentials.packages.list(package)
+    return [
+        Credential(
+            item.package_name, item.credential_name,
+            {f.field_type: f.value for f in item.fields},
         )
-        if not response.pagination.has_next:
-            return result
-        page += 1
+        for item in response.data
+        if item.package_name == package
+    ]

@@ -53,9 +53,11 @@ class Device(Protocol):
 
 
 class Credentials(Protocol):
-    async def list(self, package: str | None = None) -> list[dict[str, Any]]: ...
+    """Credentials of the package declared with `binding(package=...)`."""
+
+    async def list(self) -> list[dict[str, Any]]: ...
     async def type_field(
-        self, device: Device, package: str | None, field: str, name: str | None = None
+        self, device: Device, field: str, *, name: str | None = None
     ) -> None: ...
 
 

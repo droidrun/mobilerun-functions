@@ -247,12 +247,14 @@ class Ctx(Context):
 @script
 async def main(input: Input, ctx: Ctx) -> None:
     await ctx.tasks.run("Focus the password field", device=ctx.device, max_steps=5)
-    await ctx.account.type_field(ctx.device, "com.example.app", "password")
+    await ctx.account.type_field(ctx.device, "password")
 ```
 
 Install `mobilerun-functions[device]` for cloud resources; add `[local]` for local device
-backends. `Device` and `Tasks` need no default, or `binding()`. Credentials require a
-package and several credentials bindings may declare distinct packages. Mailbox and proxy
+backends. `Device` and `Tasks` need no default, or `binding()`. Credentials require
+`binding(package="...")`; without it `inspect` fails. Each credentials binding is bound to its
+package, and several bindings may declare distinct packages. A `Proxy` binding requires a
+`Device` binding, as `Tasks` does. Mailbox and proxy
 bindings each link to a `str` Input field with the corresponding `format` shown above; the
 input value is the id of an existing resource. At most one of each other interface is allowed.
 `Tasks` requires the `Device` binding (there is one device in the context). A concrete
@@ -292,7 +294,7 @@ python -m mobilerun_functions run function.py --input-file in.json --result-file
 ```
 
 The credentials file uses the framework's YAML format, package → name → fields. A flat
-`name: value` entry is an unbound credential with the field `password`. Use `chmod 600`:
+`name: value` entry has the field `password` and binds to the declared package. Use `chmod 600`:
 files readable or writable by group or others are refused.
 
 ```yaml
@@ -303,19 +305,24 @@ com.example.app:
 another_account: example-only
 ```
 
-`credentials.list(package=None)` returns only package, name, and field names.
-`credentials.type_field(device, package, field, name=None)` types directly into a focused
-field and returns no secret value. It refreshes state and refuses to type unless a non-empty
-focused element is reported with `isEditable: true`. `package=None` searches the declared
-credentials;
-requesting another package cannot expose it. Driver failures while typing credentials are
-reported without the value. Never put credential values in input JSON or log them.
+`credentials.list()` returns only package, name, and field names of the bound package.
+`credentials.type_field(device, field, *, name=None)` types directly into a focused field
+and returns no secret value; the package is the one declared with `binding(package=...)`.
+It refreshes state and refuses to type unless a non-empty focused element is reported with
+`isEditable: true`. A flat `name: value` entry of a local credentials file binds to the
+declared package. In the cloud, only the declared packages are read (one request per
+package); other packages' values never enter the run. Driver failures while typing
+credentials are reported without the value. Never put credential values in input JSON or log
+them.
 
 Mailbox access always uses the cloud SDK, also for a local device, and needs
 `MOBILERUN_API_KEY` (or its legacy name); the base URL defaults as above. `address` is the
 resolved address;
 `await mailbox.wait_for_code(sender=None, timeout=60, after=None)` polls for an OTP while
-preserving leading zeros. Proxy resolution requires a cloud device (`--cloud` or
+preserving leading zeros. Only a code received after the wait began (UTC), or after `after`
+when you pass it, is returned. No code yet (204) keeps polling; an unknown mailbox (404), a
+conflict (409) or an auth error fails at once, and `timeout` raises `TimeoutError`.
+Proxy resolution requires a cloud device (`--cloud` or
 `--device-target cloud`) and connects the supplied existing proxy to the run's `--device-id` through the device proxy endpoint and **leaves it connected** after the run.
 No resource is bought, created, or deleted during resolution.
 

@@ -10,7 +10,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ._adapters.ai import AIAdapter, ai_base_url
-from ._adapters.credentials import CredentialsAdapter, read_cloud, read_file
+from ._adapters.credentials import Credential, CredentialsAdapter, read_cloud, read_file
 from ._adapters.device import DeviceAdapter
 from ._adapters.resources import MailboxAdapter, ProxyAdapter
 from ._adapters.tasks import CloudTasks, RunTasks
@@ -57,11 +57,10 @@ async def _resolve(
         )
     client: Any = None
     device = None
-    credentials = None
-    packages = {item.options.package for item in entry.bindings if item.interface is Credentials}
+    credential_file: list[Credential] | None = None
     for item in entry.bindings:
         member = item.name
-        reading_credentials = item.interface is Credentials and credentials is None
+        reading_credentials = item.interface is Credentials
         try:
             remote_resource = item.interface in (Mailbox, Proxy, Tasks)
             remote_credentials = item.interface is Credentials and connection.cloud
@@ -74,16 +73,15 @@ async def _resolve(
                     AsyncMobilerun(api_key=api_key, base_url=base_url)
                 )
             if item.interface is Credentials:
-                if credentials is None:
-                    if connection.cloud:
-                        credentials = await read_cloud(
-                            client, {p for p in packages if p is not None}
-                        )
-                    else:
-                        if not credentials_file:
-                            raise NotAvailableError("credentials", "pass --credentials-file PATH")
-                        credentials = await asyncio.to_thread(read_file, credentials_file)
                 assert item.options.package is not None
+                if connection.cloud:
+                    credentials = await read_cloud(client, item.options.package)
+                else:
+                    if not credentials_file:
+                        raise NotAvailableError("credentials", "pass --credentials-file PATH")
+                    if credential_file is None:
+                        credential_file = await asyncio.to_thread(read_file, credentials_file)
+                    credentials = credential_file
                 value: Any = CredentialsAdapter(credentials, item.options.package)
             elif item.interface is Mailbox:
                 mailbox_id = getattr(model_input, item.options.input or "")

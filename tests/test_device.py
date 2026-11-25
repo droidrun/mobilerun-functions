@@ -336,7 +336,7 @@ def test_binding_local_flags_and_file_credentials(fake_core, fake_local, tmp_pat
     fake_core.device = focused_device(type=lambda text, **kw: typed.append((text, kw)))
     script = source(
         'device: Device\ncredentials: Credentials = binding(package="com.example")',
-        'await ctx.credentials.type_field(ctx.device, None, "password", name="work")',
+        'await ctx.credentials.type_field(ctx.device, "password", name="work")',
     )
     result = run_script(script, extra_args=[
         "--device-id", "emulator-5554", "--device-target", "local",
@@ -404,7 +404,7 @@ def test_credential_driver_failure_does_not_leak_the_value(
     fake_core.device = focused_device(type=reject)
     result = run_script(source(
         'device: Device\nvault: Credentials = binding(package="com.example")',
-        'await ctx.vault.type_field(ctx.device, None, "password")',
+        'await ctx.vault.type_field(ctx.device, "password")',
     ), extra_args=[
         "--device-id", "serial", "--device-target", "local", "--credentials-file", str(path),
     ])
@@ -524,7 +524,7 @@ def test_sync_bound_context_can_run_its_own_event_loop(tmp_path, run_script):
     ).replace("async def main", "def main")
     result = run_script(script, extra_args=["--credentials-file", str(path)])
     assert result.code == 0, result.err
-    assert result.out == "[{'package': None, 'name': 'work', 'fields': ['password']}]\n"
+    assert result.out == "[{'package': 'com.example', 'name': 'work', 'fields': ['password']}]\n"
 
 
 @pytest.mark.parametrize("phone_state", [
@@ -550,7 +550,7 @@ def test_credentials_refuse_unfocused_input(
     )
     result = run_script(source(
         'device: Device\nvault: Credentials = binding(package="com.example")',
-        'await ctx.vault.type_field(ctx.device, None, "password")',
+        'await ctx.vault.type_field(ctx.device, "password")',
     ), extra_args=[
         "--device-target", "local", "--device-id", "serial", "--credentials-file", str(path),
     ])
@@ -576,3 +576,47 @@ def test_missing_yaml_reports_install_extra(tmp_path, monkeypatch, run_script):
     assert result.envelope["error"]["message"] == (
         "NotAvailableError: ctx.vault install mobilerun-functions[device]"
     )
+
+
+def test_file_credentials_bind_to_the_declared_package_only(tmp_path, run_script):
+    from test_bindings import source
+
+    path = tmp_path / "credentials.yaml"
+    path.write_text(
+        "com.example:\n  work:\n    password: file-secret-value\n"
+        "com.other:\n  leak:\n    password: other-secret-value\n"
+        "flat: flat-secret-value\n"
+    )
+    path.chmod(0o600)
+    result = run_script(source(
+        'vault: Credentials = binding(package="com.example")',
+        'print(await ctx.vault.list())',
+    ), extra_args=["--credentials-file", str(path)])
+    assert result.code == 0, result.err
+    assert result.out == (
+        "[{'package': 'com.example', 'name': 'work', 'fields': ['password']}, "
+        "{'package': 'com.example', 'name': 'flat', 'fields': ['password']}]\n"
+    )
+    assert "other-secret-value" not in result.out + result.err + json.dumps(result.envelope)
+
+
+def test_file_credentials_never_type_another_packages_entry(
+    fake_core, fake_local, tmp_path, run_script
+):
+    from test_bindings import source
+
+    path = tmp_path / "credentials.yaml"
+    path.write_text("com.other:\n  leak:\n    password: other-secret-value\n")
+    path.chmod(0o600)
+    typed = []
+    fake_core.device = focused_device(type=lambda text, **kw: typed.append(text))
+    result = run_script(source(
+        'device: Device\nvault: Credentials = binding(package="com.example")', 'print("MAIN")',
+    ), extra_args=[
+        "--device-id", "serial", "--device-target", "local", "--credentials-file", str(path),
+    ])
+    assert result.code == 1
+    assert result.envelope["error"]["message"] == (
+        "NotAvailableError: ctx.vault no credentials for the declared package"
+    )
+    assert typed == []

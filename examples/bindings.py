@@ -42,7 +42,7 @@ class Ctx(Context):
 async def main(input: Input, ctx: Ctx) -> Output:
     await ctx.device.start_app(input.package)
     await ctx.tasks.run("Focus the password field", device=ctx.device, max_steps=5)
-    await ctx.credentials.type_field(ctx.device, input.package, "password")
+    await ctx.credentials.type_field(ctx.device, "password")
     reply = await ctx.ai.openai().chat.completions.create(
         model="openai/gpt-4o",
         messages=[{"role": "user", "content": "Say hello in one word"}],
