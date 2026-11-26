@@ -1124,3 +1124,72 @@ def test_programmatic_proxy_id_is_validated(sdk, core, tmp_path, write_script):
     assert code == 1
     assert envelope["error"]["message"] == "NotAvailableError: ctx.proxy has an invalid proxy id"
     assert requests == []
+
+
+FILE_ARGS = ["--cloud", "--device-id", "dev-1"]
+
+
+@pytest.fixture
+def file_sdk(monkeypatch, core):
+    requests = []
+
+    async def handle(request):
+        requests.append((request, request.read()))
+        if request.url.path.endswith("/download"):
+            return httpx.Response(200, content=b"\x00\xff binary")
+        return httpx.Response(204)
+
+    monkeypatch.setattr("mobilerun_sdk.AsyncMobilerun", lambda **kw: SDKClient(
+        **kw, max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    ))
+    monkeypatch.setenv("MOBILERUN_API_KEY", "test-key")
+    monkeypatch.setenv("MOBILERUN_BASE_URL", "https://api.example.test/v1")
+    return requests
+
+
+def test_push_file_uploads_bytes_to_the_run_device(file_sdk, run_script, tmp_path):
+    local = tmp_path / "a.bin"
+    local.write_bytes(b"from disk")
+    result = run_script(source(
+        "device: Device",
+        f'await ctx.device.push_file(b"raw", "/sdcard/Download/x.bin")\n'
+        f'    await ctx.device.push_file({str(local)!r}, "/sdcard/y.bin")',
+    ), extra_args=FILE_ARGS)
+    assert result.code == 0, result.err
+    assert [(r.method, r.url.path, r.url.params["path"]) for r, _ in file_sdk] == [
+        ("POST", "/v1/devices/dev-1/files", "/sdcard/Download"),
+        ("POST", "/v1/devices/dev-1/files", "/sdcard"),
+    ]
+    assert b'filename="x.bin"' in file_sdk[0][1] and b"raw" in file_sdk[0][1]
+    assert b'filename="y.bin"' in file_sdk[1][1] and b"from disk" in file_sdk[1][1]
+
+
+def test_pull_file_returns_the_bytes(file_sdk, run_script):
+    result = run_script(source(
+        "device: Device", 'print(await ctx.device.pull_file("/sdcard/x.bin"))',
+    ), extra_args=FILE_ARGS)
+    assert result.code == 0, result.err
+    assert result.out == "b'\\x00\\xff binary'\n"
+    request = file_sdk[0][0]
+    assert request.url.path == "/v1/devices/dev-1/files/download"
+    assert request.url.params["path"] == "/sdcard/x.bin"
+
+
+def test_sync_main_pull_file_stays_on_the_runner_loop(file_sdk, run_script):
+    result = run_script(source(
+        "device: Device",
+        'print(len(asyncio.run(ctx.device.pull_file("/sdcard/x.bin"))))',
+        before="\nimport asyncio\n",
+    ).replace("async def main", "def main"), extra_args=FILE_ARGS)
+    assert result.code == 0, result.err
+    assert result.out == "9\n"
+
+
+def test_local_device_has_no_files(core, monkeypatch, run_script):
+    monkeypatch.setitem(sys.modules, "mobilerun_core_local", types.ModuleType("x"))
+    result = run_script(source(
+        "device: Device", 'await ctx.device.pull_file("/sdcard/x.bin")',
+    ), extra_args=["--device-target", "local", "--device-id", "emulator-5554"])
+    assert result.code != 0
+    assert "device files need a cloud device" in (result.err + result.out)

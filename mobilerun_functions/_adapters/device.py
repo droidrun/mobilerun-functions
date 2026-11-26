@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import posixpath
 import tempfile
 from pathlib import Path
 from typing import Any
 
 from ..bindings import UIState
 from ..errors import NotAvailableError
+from .owner import LoopOwner
 
 SCREENSHOT_PREFIX = "mobilerun-screenshot-"
 
@@ -54,9 +56,17 @@ def _is_screenshot_temp_file(path: Path) -> bool:
 
 
 class DeviceAdapter:
-    def __init__(self, core: Any, device_id: str | None) -> None:
+    def __init__(
+        self,
+        core: Any,
+        device_id: str | None,
+        client: Any = None,
+        owner: LoopOwner | None = None,
+    ) -> None:
         self._core = core
         self.device_id = device_id
+        self._client = client
+        self._owner = owner or LoopOwner()
         self._state = StateAdapter(core)
 
     @property
@@ -110,3 +120,31 @@ class DeviceAdapter:
 
     async def wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
+
+    def _files(self) -> Any:
+        if self._client is None or not self.device_id:
+            raise NotAvailableError(
+                "device.files",
+                "device files need a cloud device (use --cloud or --device-target cloud)",
+            )
+        return self._client.devices.files
+
+    async def push_file(self, source: str | Path | bytes, device_path: str) -> None:
+        """Write `source` (a local path or bytes) to `device_path`, the file's full device path."""
+        files = self._files()
+        directory, name = posixpath.split(device_path)
+        content = source
+        if not isinstance(source, bytes):
+            content = await asyncio.to_thread(Path(source).read_bytes)
+        await self._owner.run(
+            files.upload(self.device_id, path=directory or "/", file=(name, content))
+        )
+
+    async def pull_file(self, device_path: str) -> bytes:
+        """Return the bytes of the file at `device_path`."""
+        files = self._files()
+        return await self._owner.run(self._download(files, device_path))
+
+    async def _download(self, files: Any, device_path: str) -> bytes:
+        response = await files.with_raw_response.download(self.device_id, path=device_path)
+        return bytes(await response.read())

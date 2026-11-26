@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from pydantic import BaseModel
@@ -50,6 +51,8 @@ class Device(Protocol):
     @property
     def state(self) -> DeviceState: ...
     async def press_key_code(self, key_code: int) -> None: ...
+    async def push_file(self, source: str | Path | bytes, device_path: str) -> None: ...
+    async def pull_file(self, device_path: str) -> bytes: ...
 
 
 class Credentials(Protocol):

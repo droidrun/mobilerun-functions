@@ -370,6 +370,16 @@ The async Device interface provides `screenshot` (bytes), `tap`, `swipe`, `drag`
 `NotAvailableError` before the first refresh). UIState contains elements, formatted_text, focused_text, phone_state,
 screen_width, and screen_height. **The wording of `formatted_text` may change in a later version.**
 
+`await ctx.device.push_file(source, device_path)` writes a local path or `bytes` to the full
+`device_path` on the run's device; `await ctx.device.pull_file(device_path)` returns the file's
+bytes. Files go between the device and the function only (no storage); size limits and errors come
+from the API. Cloud devices only: a local device raises `NotAvailableError`.
+
+```python
+await ctx.device.push_file(b"hello", "/sdcard/Download/hello.txt")
+data = await ctx.device.pull_file("/sdcard/Download/hello.txt")
+```
+
 Declaring `tasks: Tasks` provides `await ctx.tasks.run(task, device=ctx.device, output=Model,
 max_steps=..., timeout=...)`. It runs a natural-language task on the context's device, spends
 normal task usage, and buys nothing. `device` must be the context's `Device`; any other object

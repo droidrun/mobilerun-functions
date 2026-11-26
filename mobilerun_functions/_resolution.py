@@ -97,7 +97,15 @@ async def _resolve(
                 core = await _device(ctx, connection)
                 if hasattr(core, "close"):
                     stack.callback(core.close)
-                device = DeviceAdapter(core, ctx.run.device_id)
+                if client is None and _cloud_device(ctx.run, connection) and connection.api_key:
+                    base_url, api_key = connection.require_cloud(member)
+                    from mobilerun_sdk import AsyncMobilerun
+
+                    client = await stack.enter_async_context(
+                        AsyncMobilerun(api_key=api_key, base_url=base_url)
+                    )
+                files_client = client if _cloud_device(ctx.run, connection) else None
+                device = DeviceAdapter(core, ctx.run.device_id, files_client, owner)
                 value = device
             setattr(ctx, item.name, value)
         except NotAvailableError as exc:
