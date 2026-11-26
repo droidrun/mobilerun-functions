@@ -63,6 +63,8 @@ def package_list(items):
 
 
 def credential(package="com.example", name="work", value="vault-secret"):
+    # credentials-api returns the stored form: dots become dashes ("com-android-chrome").
+    package = package.replace(".", "-")
     return {
         "createdBy": None, "credentialName": name, "fields": [
             {"fieldType": "password", "value": value},
@@ -121,6 +123,22 @@ def test_cloud_credentials_drop_entries_of_an_undeclared_package(sdk, run_script
     assert result.code == 0, result.err
     assert result.out == "[{'package': 'com.example', 'name': 'work', 'fields': ['password']}]\n"
     assert "undeclared-secret" not in result.out + result.err + json.dumps(result.envelope)
+
+
+def test_cloud_credentials_match_a_dotted_package_to_its_stored_dashed_form(sdk, run_script):
+    responses, _ = sdk
+    responses.append((200, package_list([
+        credential("com.android.chrome", "herokuapp-demo"),
+        credential("com-android-chrome-beta", "leak", "undeclared-secret"),
+    ])))
+    result = run_script(source(
+        'vault: Credentials = binding(package="com.android.chrome")',
+        'print(await ctx.vault.list())',
+    ), extra_args=["--cloud"])
+    assert result.code == 0, result.err
+    assert result.out == (
+        "[{'package': 'com.android.chrome', 'name': 'herokuapp-demo', 'fields': ['password']}]\n"
+    )
 
 
 def test_read_cloud_keeps_only_the_declared_package_in_memory():

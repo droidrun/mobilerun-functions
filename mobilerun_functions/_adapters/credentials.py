@@ -130,14 +130,20 @@ def _normalize(data: Any) -> list[Credential]:
     return result
 
 
+def _stored_package_name(name: str) -> str:
+    # credentials-api stores package names as `name.trim().replace(/\./g, '-')`.
+    return name.strip().replace(".", "-")
+
+
 async def read_cloud(client: Any, package: str) -> list[Credential]:
     """Read one declared package; an org-wide list would put other packages' values in the run."""
     response = await client.credentials.packages.list(package)
+    stored = _stored_package_name(package)
     return [
         Credential(
-            item.package_name, item.credential_name,
+            package, item.credential_name,
             {f.field_type: f.value for f in item.fields},
         )
         for item in response.data
-        if item.package_name == package
+        if item.package_name == stored
     ]
