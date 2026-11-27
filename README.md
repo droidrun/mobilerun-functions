@@ -249,6 +249,15 @@ async def main(input: Input, ctx: Ctx) -> None:
     await ctx.account.type_field(ctx.device, "password")
 ```
 
+`ctx.device.push_file(source, device_path)` writes bytes or a local file path to a full path on
+the device; `await ctx.device.pull_file(device_path)` returns the file's raw bytes. Both forward
+to mobilerun-core (cloud and local Android over adb; other backends raise its unsupported error).
+
+```python
+await ctx.device.push_file(b"hello", "/sdcard/Download/hello.txt")
+data = await ctx.device.pull_file("/sdcard/Download/hello.txt")
+```
+
 Install `mobilerun-functions[device]` for cloud resources; add `[local]` for local device
 backends. `Device`, `Mailbox`, `Proxy` and `Tasks` need no default, or `binding()`; they accept no
 options. Credentials require
