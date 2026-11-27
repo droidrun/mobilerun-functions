@@ -492,6 +492,62 @@ def test_binding_device_primitives_use_core_backend(
     assert calls == [(args, kwargs)]
 
 
+PULLED = b"\xff\xfe\x00caf\xc3\xa9"  # not valid UTF-8: a decode or re-encode changes it
+
+
+def test_binding_push_file_forwards_source_and_device_path(fake_core, run_script):
+    from test_bindings import source
+
+    calls = []
+    fake_core.device = types.SimpleNamespace(
+        push_file=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    body = "\n    ".join([
+        'print(await ctx.device.push_file(b"\\x00data", "/sdcard/a.bin"))',
+        'print(await ctx.device.push_file("/tmp/local.txt", "/sdcard/b.txt"))',
+    ])
+    result = run_script(source("device: Device", body), extra_args=["--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    assert result.out == "None\nNone\n"
+    assert calls == [
+        ((b"\x00data", "/sdcard/a.bin"), {}),
+        (("/tmp/local.txt", "/sdcard/b.txt"), {}),
+    ]
+
+
+def test_binding_pull_file_returns_core_bytes_unchanged(fake_core, run_script):
+    from test_bindings import source
+
+    calls = []
+    fake_core.device = types.SimpleNamespace(
+        pull_file=lambda *args, **kwargs: calls.append((args, kwargs)) or PULLED,
+    )
+    result = run_script(source("device: Device", 'print(repr(await ctx.device.pull_file("/x")))'),
+                        extra_args=["--device-id", "dev-1"])
+    assert result.code == 0, result.err
+    assert result.out == f"{PULLED!r}\n"
+    assert calls == [(("/x",), {})]
+
+
+@pytest.mark.parametrize("verb,call", [
+    ("push_file", 'await ctx.device.push_file(b"x", "/sdcard/x")'),
+    ("pull_file", 'await ctx.device.pull_file("/sdcard/x")'),
+])
+def test_binding_file_verbs_surface_core_unsupported_error(fake_core, run_script, verb, call):
+    from test_bindings import source
+
+    class UnsupportedOperation(NotImplementedError):  # core's class for a backend without the verb
+        pass
+
+    def unsupported(*args, **kwargs):
+        raise UnsupportedOperation(f"{verb} is not supported on this backend")
+
+    fake_core.device = types.SimpleNamespace(**{verb: unsupported})
+    result = run_script(source("device: Device", call), extra_args=["--device-id", "dev-1"])
+    assert result.code == 1
+    assert f"{verb} is not supported on this backend" in result.envelope["error"]["message"]
+
+
 def test_binding_screenshot_decodes_local_base64(fake_core, run_script):
     from test_bindings import source
 

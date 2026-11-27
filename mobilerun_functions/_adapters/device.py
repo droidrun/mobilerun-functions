@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -107,6 +108,13 @@ class DeviceAdapter:
     async def list_apps(self, include_system: bool = False) -> list[dict[str, str]]:
         apps = await asyncio.to_thread(self._core.list_apps, include_system_apps=include_system)
         return [{key: str(value) for key, value in app.items()} for app in apps]
+
+    async def push_file(self, source: bytes | str | os.PathLike[str], device_path: str) -> None:
+        await asyncio.to_thread(self._core.push_file, source, device_path)
+
+    async def pull_file(self, device_path: str) -> bytes:
+        result: bytes = await asyncio.to_thread(self._core.pull_file, device_path)
+        return result
 
     async def wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
